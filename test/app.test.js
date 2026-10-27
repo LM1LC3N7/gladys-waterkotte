@@ -23,6 +23,28 @@ import {
 const paths = (pump) => pump.requests.map((r) => r.path);
 const writes = (pump) => pump.writes().map((r) => `${r.query.t1}=${r.query.v1}`);
 
+/** Counts the connections open at once (`peak`); installed before setup (the app keeps `connect`). */
+function trackOpen(pump) {
+  const seen = { open: 0, peak: 0 };
+  const connect = pump.connect;
+  pump.connect = () => {
+    const s = connect();
+    seen.open += 1;
+    seen.peak = Math.max(seen.peak, seen.open);
+    const destroy = s.destroy;
+    let closed = false;
+    s.destroy = () => {
+      if (!closed) {
+        closed = true;
+        seen.open -= 1;
+      }
+      destroy();
+    };
+    return s;
+  };
+  return seen;
+}
+
 test('without an address or a password, the status asks for it and nothing is requested', async (t) => {
   const clock = testClock();
   const pump = fakePump({ clock });
@@ -200,6 +222,26 @@ test('getConfig failing: retried every 30 s with a status, without end', async (
   assert.equal(calls, 3);
 });
 
+test('getConfig failing once after a reconnection: retried 30 s later, then applied, same client', async (t) => {
+  const { app, gladys, pump, advance } = await setup(t);
+  let calls = 0;
+  await app.connected(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error('down');
+    }
+    return ALLOWED;
+  });
+  assert.match(message(gladys).fr, /Configuration non lue/);
+  assert.equal(app.config.allowCommands, false);
+  await advance(31 * SECOND, SECOND);
+  assert.equal(calls, 2);
+  assert.equal(app.config.allowCommands, true);
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+  assert.match(message(gladys).fr, /Connecté/);
+  assert.equal(pump.count(/login/), 1);
+});
+
 test('an oversized answer is cut, the poll fails and backs off', async (t) => {
   const { gladys, pump, advance } = await setup(t);
   pump.bigBody = 100 * 1024;
@@ -369,7 +411,8 @@ test('a scene Auto then Off on a slow controller: the older Auto does not cancel
   const off = gladys.fake.setValue(d, target, 'off');
   await advance(5000);
   assert.deepEqual(await auto, { success: true });
-  assert.match((await off).error, /Arrêt non envoyé/);
+  // The gate not free in time: "no answer in time", never an ambiguous "too late".
+  assert.match((await off).error, /Arrêt non envoyé \(pas de réponse à temps\)/);
   pump.latency = 0;
   await advance(2 * MINUTE, SECOND);
   assert.equal(pump.tags.I30, '0');
@@ -462,26 +505,9 @@ test('an Off not sent is tried again within 10 to 20 s, not at the next poll', a
 test('the configuration saved during a slow logout: the Off goes on the new client only, one connection at a time', async (t) => {
   const clock = testClock();
   const pump = fakePump({ clock });
-  let open = 0;
-  let peak = 0;
-  const connect = pump.connect;
-  pump.connect = () => {
-    const s = connect();
-    open += 1;
-    peak = Math.max(peak, open);
-    const destroy = s.destroy;
-    let closed = false;
-    s.destroy = () => {
-      if (!closed) {
-        closed = true;
-        open -= 1;
-      }
-      destroy();
-    };
-    return s;
-  };
+  const seen = trackOpen(pump);
   const { gladys, device, advance } = await setup(t, { pump, clock });
-  peak = 0;
+  seen.peak = 0;
   pump.latency = (path) => (path.startsWith('/cgi/logout') ? 900 : 0);
   const d = device();
   const target = d.features.find((f) => f.external_id === feature('heating-mode'));
@@ -492,8 +518,233 @@ test('the configuration saved during a slow logout: the Off goes on the new clie
   await saved;
   assert.deepEqual(await off, { success: true });
   assert.equal(pump.tags.I30, '0');
-  assert.equal(peak, 1);
+  assert.equal(seen.peak, 1);
   assert.equal(pump.sessions.size, 1);
+});
+
+/**
+ * Two saves of the configuration in a row while a poll is in flight (the
+ * SDK runs the messages concurrently): the first (interval 45 s) allows the
+ * commands, the second (interval `second`), `gap` ms later, forbids them.
+ */
+async function twoSaves(t, { gap, second }) {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const seen = trackOpen(pump);
+  const { gladys, app, command, advance } = await setup(t, {
+    pump,
+    clock,
+    config: { ...ALLOWED, poll_interval: 30 },
+  });
+  pump.tags.I30 = '2';
+  pump.latency = (path) => (path.startsWith('/cgi/readTags') ? 2000 : 0);
+  app.lastReadAt = undefined;
+  app.tick();
+  await advance(50, 50);
+  const first = app.client;
+  seen.peak = 0;
+  const saves = [gladys.fake.configUpdated({ ...ALLOWED, poll_interval: 45 })];
+  await advance(gap, 50);
+  saves.push(gladys.fake.configUpdated({ ...CONFIG, poll_interval: second }));
+  await advance(4000, 50);
+  await Promise.all(saves);
+  pump.latency = 0;
+  const ack = await command('heating-mode', 'auto');
+  return { ack, app, pump, seen, first };
+}
+
+for (const [second, name] of [
+  [45, 'the second keeps the new interval'],
+  [30, 'the second goes back to the old interval'],
+]) {
+  test(`two saves in a row during a poll, ${name}: the latest wins, one client`, async (t) => {
+    // During the logout of the first client, then once the first restart has its client.
+    for (const gap of [100, 1500, 3000]) {
+      const { ack, app, pump, seen, first } = await twoSaves(t, { gap, second });
+      assert.match(ack.error, /désactivées/, `gap ${gap} ms`);
+      assert.equal(pump.writes().length, 0);
+      assert.equal(pump.tags.I30, '2');
+      assert.equal(app.config.allowCommands, false);
+      assert.equal(app.config.pollInterval, second);
+      assert.ok(first.closed && !app.client.closed, 'one client alive');
+      assert.equal(seen.peak, 1);
+      assert.ok(pump.sessions.size <= 1);
+    }
+  });
+}
+
+test('a configuration received during a restart restricts the commands at once', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { gladys, app, device, command, advance } = await setup(t, {
+    pump,
+    clock,
+    config: ALLOWED,
+  });
+  pump.applyDelay = Infinity;
+  // A stop kept: the restart has a stop round, slow.
+  await command('heating-mode', 'off', { wait: 3000 });
+  pump.latency = (path) => (path.startsWith('/cgi/readTags') ? 1000 : 0);
+  const saves = [gladys.fake.configUpdated({ ...ALLOWED, poll_interval: 45 })];
+  await advance(300, 50);
+  assert.ok(app.client && app.applying, 'the new client runs its first round');
+  saves.push(
+    gladys.fake.configUpdated({
+      ...CONFIG,
+      poll_interval: 45,
+      dhw_max_temperature: 45,
+    }),
+  );
+  const d = device();
+  const answers = [];
+  for (const [role, value] of [
+    ['heating-mode', 'auto'],
+    ['dhw-setpoint', 50],
+  ]) {
+    const target = d.features.find((f) => f.external_id === feature(role));
+    gladys.fake.setValue(d, target, value).then((ack) => answers.push(ack.error));
+  }
+  await advance(100, 50);
+  // Refused before the end of the restart, nothing asked of the controller.
+  assert.equal(answers.length, 2);
+  assert.match(answers.join(' '), /désactivées/);
+  assert.match(answers.join(' '), /plafond d'eau chaude de 45/);
+  await advance(3000, 50);
+  await Promise.all(saves);
+  assert.equal(app.config.allowCommands, false);
+  assert.equal(app.config.dhwCap, 45);
+  assert.ok(pump.writes().every((r) => r.query.t1 === 'I30'));
+});
+
+test('Gladys reconnects while the configuration is saved: the save wins over the older answer', async (t) => {
+  const clock = testClock();
+  const { app, gladys, advance } = await setup(t, { clock, config: ALLOWED });
+  const reconnected = app.connected(
+    () => new Promise((resolve) => clock.timers.setTimeout(() => resolve(ALLOWED), 1000)),
+  );
+  await advance(100, 50);
+  await gladys.fake.configUpdated(CONFIG);
+  await advance(1000, 50);
+  await reconnected;
+  assert.equal(app.config.allowCommands, false);
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+});
+
+test('Off clicked while a configuration without an address is applied: "not configured", kept', async (t) => {
+  const clock = testClock();
+  const store = createMemoryStore();
+  const pump = fakePump({ clock });
+  const { gladys, device, advance } = await setup(t, { pump, clock, store });
+  pump.latency = (path) => (path.startsWith('/cgi/logout') ? 900 : 0);
+  const saved = gladys.fake.configUpdated({ password: PASSWORD });
+  await advance(100, 50);
+  const d = device();
+  const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+  const off = gladys.fake.setValue(d, target, 'off');
+  await advance(4000, 50);
+  await saved;
+  assert.match((await off).error, /pas configurée/);
+  assert.equal(store.data.stops.length, 1);
+  assert.equal(pump.writes().length, 0);
+});
+
+test('Off clicked while the configuration switches to EasyCon: refused (read only), not kept', async (t) => {
+  const clock = testClock();
+  const store = createMemoryStore();
+  const pump = fakePump({ clock });
+  const { gladys, device, advance } = await setup(t, { pump, clock, store });
+  pump.latency = (path) => (path.startsWith('/cgi/logout') ? 900 : 0);
+  const saved = gladys.fake.configUpdated({ ...CONFIG, system: 'easycon' });
+  await advance(100, 50);
+  const d = device();
+  const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+  const off = gladys.fake.setValue(d, target, 'off');
+  await advance(4000, 50);
+  await saved;
+  assert.match((await off).error, /EasyCon est en lecture seule/);
+  assert.equal(store.data.stops.length, 0);
+  assert.equal(pump.writes().length, 0);
+});
+
+test('Off during a restart, written by the first round of the new client: its read back answers', async (t) => {
+  for (const [read, expected] of [
+    [2500, undefined],
+    [4500, /Arrêt envoyé, sans confirmation \(pas de réponse à temps\)/],
+  ]) {
+    const clock = testClock();
+    const pump = fakePump({ clock });
+    const { gladys, app, device, advance } = await setup(t, { pump, clock });
+    pump.latency = (path) =>
+      path.startsWith('/cgi/readTags') ? read : path.startsWith('/cgi/logout') ? 700 : 0;
+    app.lastReadAt = undefined;
+    app.tick();
+    await advance(50, 50);
+    const saved = gladys.fake.configUpdated({ ...CONFIG, poll_interval: 45 });
+    // The poll ends, the logout of the old session starts.
+    await advance(read + 100, 50);
+    const d = device();
+    const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+    const off = gladys.fake.setValue(d, target, 'off');
+    // The round's read back ends 5.1 s after the click at most.
+    await advance(6000, 50);
+    await saved;
+    const ack = await off;
+    if (expected) {
+      assert.match(ack.error, expected);
+    } else {
+      assert.deepEqual(ack, { success: true });
+    }
+    // Written once, by the round of the new client.
+    assert.deepEqual(writes(pump), ['I30=0']);
+    assert.equal(pump.tags.I30, '0');
+  }
+});
+
+test('shut down during a restart: no new client, every session ended, nothing runs after', async (t) => {
+  // During the logout of the previous client.
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { gladys, app, advance } = await setup(t, { pump, clock });
+  pump.latency = (path) => (path.startsWith('/cgi/logout') ? 900 : 0);
+  const saved = gladys.fake.configUpdated({ ...CONFIG, poll_interval: 45 });
+  await advance(100, 50);
+  let done = false;
+  const closed = app.close().then(() => {
+    done = true;
+  });
+  await advance(300, 50);
+  assert.equal(done, false, 'the shutdown waits for the logout in flight');
+  await advance(2000, 50);
+  await closed;
+  await saved;
+  assert.equal(app.client, undefined);
+  assert.equal(pump.sessions.size, 0);
+  assert.equal(pump.count(/login/), 1);
+  const requests = pump.requests.length;
+  await advance(5 * MINUTE, 10 * SECOND);
+  assert.equal(pump.requests.length, requests);
+  assert.equal(clock.pending, 0, 'no timer left');
+
+  // During the login of the new client (its first stop round): that session is ended too.
+  const clock2 = testClock();
+  const pump2 = fakePump({ clock: clock2 });
+  const second = await setup(t, { pump: pump2, clock: clock2 });
+  pump2.applyDelay = Infinity;
+  await second.command('heating-mode', 'off', { wait: 3000 });
+  pump2.early = /login/;
+  pump2.latency = (path) => (path.startsWith('/cgi/login') ? 500 : 0);
+  const saved2 = second.gladys.fake.configUpdated({ ...CONFIG, poll_interval: 45 });
+  await second.advance(200, 50);
+  assert.equal(pump2.sessions.size, 1, 'the new login reached the controller');
+  const closed2 = second.app.close();
+  await second.advance(3000, 50);
+  await closed2;
+  await saved2;
+  assert.equal(pump2.sessions.size, 0);
+  const after = pump2.requests.length;
+  await second.advance(5 * MINUTE, 10 * SECOND);
+  assert.equal(pump2.requests.length, after);
+  assert.equal(clock2.pending, 0, 'no timer left');
 });
 
 test('a kept stop: the write meets "#E_NEED_LOGIN" then the login "too many users": not counted, written later', async (t) => {

@@ -44,8 +44,10 @@ La régulation accepte peu de sessions à la fois (deux selon ha-waterkotte ;
 sa page web ouverte dans un navigateur en prend une) et ferme une session
 inactive après 5 minutes environ : après un redémarrage de Gladys, l'ancienne
 session peut rester prise aussi longtemps. Gladys garde une seule session
-ouverte, la ferme quand il s'arrête ou quand la configuration change, et se
-reconnecte au plus une fois par lecture ou par commande, jamais en boucle.
+ouverte, la ferme quand il s'arrête ou quand la configuration change
+(enregistrée plusieurs fois de suite : appliquée l'une après l'autre, la
+dernière enregistrée l'emporte), et se reconnecte au plus une fois par
+lecture ou par commande, jamais en boucle.
 Quand la régulation répond « trop d'utilisateurs », Gladys fait une pause de
 1 minute, puis 2, 4… jusqu'à 6 heures, et l'indique dans l'écran de
 configuration. Quand elle refuse le nom d'utilisateur ou le mot de passe,
@@ -67,7 +69,9 @@ d'une lecture en cours. Il est écrit, puis relu :
   quelqu'un d'autre (sur la régulation, sa page web) ; une commande plus
   ancienne de Gladys ne compte pas. Un arrêt pas encore écrit est réessayé
   10 secondes plus tard, puis chaque minute ; pendant une pause aussi,
-  jusqu'à ses 15 minutes (une connexion par minute au plus).
+  jusqu'à ses 15 minutes (une connexion par minute au plus). Un tel arrêt
+  peut donc partir jusqu'à 15 minutes après le clic, une fois, par-dessus
+  un réglage fait entre-temps sur la régulation.
 
 L'Arrêt est refusé, rien n'est envoyé, dans ces cas seulement :
 

@@ -358,10 +358,11 @@ export class WaterkotteClient {
   /**
    * Ends the session (best effort), so that it does not hold one of the two
    * the controller accepts: after the request in flight (5 s at most), 1 s
-   * for the answer.
+   * for the answer. The session is looked at once the gate is held: one
+   * opened by a login in flight is ended too.
    */
   async logout() {
-    if (this.system !== SYSTEMS.ECOTOUCH || !this.cookie || this.closed) {
+    if (this.system !== SYSTEMS.ECOTOUCH || this.closed || (!this.cookie && !this.current)) {
       return;
     }
     const startBy = this.monotonic() + TIMINGS.requestTimeout;
@@ -369,12 +370,14 @@ export class WaterkotteClient {
       await this.hold(
         PRIORITY.COMMAND,
         (hold) =>
-          hold.get(logoutPath(), {
-            startBy,
-            answerBy: startBy + TIMINGS.stalled,
-            auth: 'cookie',
-            keep: true,
-          }),
+          this.cookie
+            ? hold.get(logoutPath(), {
+                startBy,
+                answerBy: startBy + TIMINGS.stalled,
+                auth: 'cookie',
+                keep: true,
+              })
+            : undefined,
         { startBy },
       );
     } catch {

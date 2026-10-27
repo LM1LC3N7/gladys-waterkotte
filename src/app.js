@@ -10,8 +10,8 @@
 //     makes a poll give the gate back and cuts a read silent for 1 s; it is
 //     retried every 250 ms within its 3 s budget, read back, and when not
 //     confirmed kept in /data and written again by the next reads (3 times at
-//     most, 15 minutes at most, never over a value someone else set since).
-//     Nothing clicked before it leaves after it.
+//     most, 15 minutes at most; once written, not again over a value someone
+//     else set since). Nothing clicked before it leaves after it.
 //   - "Auto", "Manual" and the hot water setpoint are SENSITIVE: refused
 //     unless the option allows them (checked on arrival and right before the
 //     bytes leave), decided on a fresh read of the target and of the serial
@@ -116,6 +116,16 @@ export class WaterkotteApp {
     this.client = undefined;
     this.generation = 0;
     this.started = false;
+    this.closed = false;
+    /**
+     * The configurations, applied one at a time (`applying`): `wanted` is the
+     * latest received and not applied yet, `received` counts them, `resend`
+     * asks to send again what Gladys keeps in memory only (reconnection).
+     */
+    this.wanted = undefined;
+    this.received = 0;
+    this.resend = false;
+    this.applying = undefined;
     this.timer = undefined;
     this.configTimer = undefined;
     this.followUps = new Set();
@@ -253,18 +263,27 @@ export class WaterkotteApp {
 
   /**
    * Connected to Gladys: read the configuration (retried every 30 s without
-   * end when it fails), start the first time, else resend what Gladys keeps
-   * in memory only (status, Discovery list, badges, states).
+   * end when it fails) and apply it like a save, then resend what Gladys
+   * keeps in memory only (status, Discovery list, badges, states). A save
+   * received while getConfig() ran is at least as new as its answer: the
+   * answer is not applied then.
    */
   async connected(getConfig) {
     if (this.configTimer) {
       this.timers.clearTimeout(this.configTimer);
       this.configTimer = undefined;
     }
+    if (this.closed) {
+      return;
+    }
+    const asked = this.received;
     let raw;
     try {
       raw = await getConfig();
     } catch (err) {
+      if (this.closed) {
+        return;
+      }
       this.logger.warn(`Reading the configuration failed: ${err.message}`);
       await this.setStatus(false, T.configUnavailable(age(CONFIG_RETRY)));
       this.configTimer = this.timers.setTimeout(() => {
@@ -273,51 +292,116 @@ export class WaterkotteApp {
       }, CONFIG_RETRY);
       return;
     }
-    if (!this.started) {
-      this.started = true;
-      await this.start(raw);
-      return;
-    }
-    if (connectionKey(normalizeConfig(raw)) !== connectionKey(this.config)) {
-      await this.start(raw);
-      return;
-    }
-    this.config = normalizeConfig(raw);
-    this.published = undefined;
-    this.badge = undefined;
-    this.lastStatus = undefined;
-    this.gladys.forgetPublishedStates?.();
-    await this.publishAll();
+    await this.receive(this.received === asked ? (raw ?? {}) : undefined, { resend: true });
   }
 
   /**
-   * (Re)starts on a configuration. While the previous client logs out, no
-   * client is current: an Off arriving then waits for the new one (or is
-   * written by its first stop round), never sent on the old one.
+   * The configuration saved, applied after those received before it: a new
+   * address, system, credentials or interval restarts, the rest applies at once.
    */
-  async start(raw = {}) {
-    const run = this.restart(raw);
-    this.starting = run;
+  configUpdated(raw = {}) {
+    return this.receive(raw);
+  }
+
+  /**
+   * A configuration received (`raw`; undefined: only `resend`). The
+   * configurations are applied one at a time, the latest received winning:
+   * never two restarts at once, never an older one over a newer one. Until
+   * it is applied, a newer configuration already restricts the sensitive
+   * commands (`allowCommands`, `dhwCap`). Resolves once every configuration
+   * received so far is applied.
+   */
+  receive(raw, { resend = false } = {}) {
+    if (this.closed) {
+      return Promise.resolve();
+    }
+    if (raw !== undefined) {
+      this.received += 1;
+      this.wanted = normalizeConfig(raw);
+    }
+    this.resend ||= resend;
+    if (!this.applying) {
+      // Started after `applying` is set: the loop clears it when it ends.
+      this.applying = Promise.resolve().then(() => this.applyAll());
+    }
+    return this.applying;
+  }
+
+  async applyAll() {
     try {
-      await run;
-    } finally {
-      if (this.starting === run) {
-        this.starting = undefined;
+      while (!this.closed && (this.wanted || this.resend)) {
+        const next = this.wanted;
+        if (next && (!this.started || connectionKey(next) !== connectionKey(this.config))) {
+          await this.restart();
+          continue;
+        }
+        // Same connection: applied at once, without a restart.
+        const resend = this.resend;
+        this.resend = false;
+        let republish = resend;
+        if (next) {
+          this.wanted = undefined;
+          const previous = this.config;
+          this.config = next;
+          if (next.allowCommands !== previous.allowCommands) {
+            this.logger.info(`Commands ${next.allowCommands ? 'allowed' : 'disabled'}`);
+          }
+          republish ||= next.language !== previous.language;
+        }
+        if (resend) {
+          this.badge = undefined;
+          this.lastStatus = undefined;
+          this.gladys.forgetPublishedStates?.();
+        }
+        if (republish) {
+          this.published = undefined;
+          await this.publishAll();
+        }
       }
+    } finally {
+      // In the same turn as the last check: a configuration received later starts a new loop.
+      this.applying = undefined;
     }
   }
 
-  async restart(raw) {
+  /**
+   * The option and the ceiling of the sensitive commands: those applied,
+   * never looser than a configuration received and not applied yet.
+   */
+  get allowCommands() {
+    return this.config.allowCommands && (this.wanted?.allowCommands ?? true);
+  }
+
+  get dhwCap() {
+    return Math.min(this.config.dhwCap, this.wanted?.dhwCap ?? DHW_CAP.max);
+  }
+
+  /**
+   * Restarts on the latest configuration received, read once the previous
+   * client logged out (one saved meanwhile wins). While it logs out, no
+   * client is current: an Off arriving then waits for the new one (its first
+   * stop round writes it), never sent on the old one. Shut down meanwhile:
+   * no new client.
+   */
+  async restart() {
     const previous = this.client;
     this.client = undefined;
     this.closing = previous;
     this.halt();
+    const generation = this.generation;
     if (previous) {
       await previous.logout();
       previous.close();
     }
     this.closing = undefined;
-    this.config = normalizeConfig(raw);
+    if (generation !== this.generation) {
+      return;
+    }
+    this.started = true;
+    this.config = this.wanted ?? this.config;
+    this.wanted = undefined;
+    // A restart sends everything again: no resend needed after it.
+    this.resend = false;
     this.values = undefined;
     this.serial = undefined;
     this.identity = undefined;
@@ -333,6 +417,9 @@ export class WaterkotteApp {
         // New credentials: the refusal is lifted.
         this.refusal = undefined;
         await this.persist();
+        if (generation !== this.generation) {
+          return;
+        }
       }
     }
     this.client =
@@ -353,9 +440,15 @@ export class WaterkotteApp {
       return;
     }
     await this.setStatus(false, T.connecting);
+    if (generation !== this.generation) {
+      return;
+    }
     // A stop kept in /data goes first, before the first poll.
     if (this.stops.size > 0 && !this.refusal) {
       await this.stopRound();
+      if (generation !== this.generation) {
+        return;
+      }
       if (this.stopsNeedRound(this.monotonic())) {
         this.scheduleStops(TIMINGS.stopRound);
       }
@@ -378,8 +471,16 @@ export class WaterkotteApp {
     this.publisher.stop();
   }
 
-  /** Shutdown: the session is ended (one of the few the controller accepts), /data written. */
+  /**
+   * Shutdown: the session is ended (one of the few the controller accepts),
+   * /data written. No configuration is applied any more; a restart in
+   * progress ends after the logout of the previous client, without a new one
+   * (or its new client is logged out here).
+   */
   async close() {
+    this.closed = true;
+    this.wanted = undefined;
+    this.resend = false;
     const client = this.client;
     this.halt();
     if (this.configTimer) {
@@ -390,6 +491,7 @@ export class WaterkotteApp {
       await client.logout();
       client.close();
     }
+    await this.applying;
     await this.persist();
   }
 
@@ -397,24 +499,6 @@ export class WaterkotteApp {
     if (this.timer) {
       this.timers.clearTimeout(this.timer);
       this.timer = undefined;
-    }
-  }
-
-  /** A new address, system, credentials or interval restarts; the rest applies at once. */
-  async configUpdated(raw = {}) {
-    const next = normalizeConfig(raw);
-    if (connectionKey(next) !== connectionKey(this.config)) {
-      await this.start(raw);
-      return;
-    }
-    const previous = this.config;
-    this.config = next;
-    if (next.allowCommands !== previous.allowCommands) {
-      this.logger.info(`Commands ${next.allowCommands ? 'allowed' : 'disabled'}`);
-    }
-    if (next.language !== previous.language) {
-      this.published = undefined;
-      await this.publishAll();
     }
   }
 
@@ -523,7 +607,7 @@ export class WaterkotteApp {
         const readSeq = this.seq;
         const result = await client.read(hold, ALL_TAGS, { allowLogin });
         if (this.stops.size > 0 && !hold.preempted) {
-          await this.resendStops(hold, result, allowLogin, readSeq);
+          await this.resendStops(client, hold, result, allowLogin, readSeq);
         }
         return result;
       });
@@ -705,10 +789,10 @@ export class WaterkotteApp {
    * read after a stop gives its `from`. A stop already written whose value
    * then changed to another one, not by an older command of Gladys, was
    * set by someone else: dropped. A stop never written is never dropped by a
-   * read. The others are written together; a write again counts only when
-   * it left, 3 at most.
+   * read. The others are written together, on the `client` of the read; a
+   * write again counts only when it left, 3 at most.
    */
-  async resendStops(hold, read, allowLogin, readSeq, justWritten = new Set()) {
+  async resendStops(client, hold, read, allowLogin, readSeq, justWritten = new Set()) {
     const mono = this.monotonic();
     const entries = [];
     let changed = this.purgeStops(mono);
@@ -720,6 +804,8 @@ export class WaterkotteApp {
       const entry = read.get(tag);
       const code = entry?.status === 'ok' ? entry.value : undefined;
       if (code === OPERATION_CODES.off) {
+        // Read back Off: done (an Off waiting for a restart answers a success).
+        stop.done = true;
         this.stops.delete(role);
         changed = true;
         continue;
@@ -758,7 +844,7 @@ export class WaterkotteApp {
     }
     if (entries.length > 0) {
       try {
-        await this.client.write(
+        await client.write(
           hold,
           entries.map(([, tag]) => [tag, encodeEcotouch(tag, OPERATION_CODES.off)]),
           { allowLogin, keep: true },
@@ -834,7 +920,7 @@ export class WaterkotteApp {
         }
         const readSeq = this.seq;
         const read = await client.read(hold, MODE_TAGS, { allowLogin, keep: true });
-        await this.resendStops(hold, read, allowLogin, readSeq, justWritten);
+        await this.resendStops(client, hold, read, allowLogin, readSeq, justWritten);
       });
     } catch (err) {
       if (err.reason === REASONS.BAD_PASSWORD) {
@@ -860,25 +946,49 @@ export class WaterkotteApp {
       from: undefined,
     };
     this.stops.set(role, stop);
-    if (!this.client && this.starting) {
-      // A new configuration is starting: wait for its client (its first stop round writes this stop).
-      // The old client gives its gate back at once: a poll in flight yields, a frozen read is cut.
+    if (!this.client && this.applying) {
+      // A new configuration is being applied: the first stop round of its
+      // client writes this stop and reads it back. The old client gives its
+      // gate back at once: a poll in flight yields, a frozen read is cut.
       this.closing?.hold(PRIORITY.STOP, async () => {}).catch(() => {});
       await this.persist();
-      await this.waitFor(this.starting, received + TIMINGS.commandSendBy - TIMINGS.commandMinSend);
-      if (this.stops.get(role) !== stop) {
-        // Written and read back Off by the first round of the new client.
-        return;
+      const startBy = received + TIMINGS.commandSendBy - TIMINGS.commandMinSend;
+      // Configurations saved in a row: until the last one has its client, within the budget.
+      while (!this.client && this.applying && this.monotonic() < startBy) {
+        await this.waitFor(this.applying, startBy);
       }
-      if (
-        !this.client ||
-        this.monotonic() >= received + TIMINGS.commandSendBy - TIMINGS.commandMinSend
-      ) {
-        this.scheduleStops(stop.written ? TIMINGS.stopRound : TIMINGS.stopQuick);
+      if (stop.written) {
+        // Written by that round: its read back gets the time of a read back.
+        const confirmBy = received + TIMINGS.commandConfirmBy;
+        while (!stop.done && this.applying && this.monotonic() < confirmBy) {
+          await this.waitFor(this.applying, confirmBy);
+        }
+        if (stop.done) {
+          return;
+        }
+        if (this.client) {
+          this.followUp();
+        }
+        this.scheduleStops(TIMINGS.stopRound);
+        // Read back another value: not applied yet; no read back: no answer in time.
         throw this.refusalError(
-          stop.written ? ERRORS.stop.unconfirmed('late') : ERRORS.stop.notSent('late'),
+          stop.from === undefined ? ERRORS.stop.unconfirmed('timeout') : ERRORS.stop.notYetApplied,
         );
       }
+      if (this.client ? this.monotonic() >= startBy : this.applying) {
+        // Still starting at the end of the budget: written by the first round of the new client.
+        this.scheduleStops(TIMINGS.stopQuick);
+        throw this.refusalError(ERRORS.stop.notSent('timeout'));
+      }
+      if (this.config.system !== SYSTEMS.ECOTOUCH) {
+        // The new controller is EasyCon (read only here): refused like any Off there, not kept.
+        if (this.stops.get(role) === stop) {
+          this.stops.delete(role);
+          await this.persist();
+        }
+        throw this.refusalError(ERRORS.easyconReadOnly);
+      }
+      // Started in time: sent below on the new client, or refused (no configuration, credentials refused).
     }
     const client = this.client;
     if (!client) {
@@ -904,7 +1014,8 @@ export class WaterkotteApp {
     const current = this.stops.get(role) === stop;
     if (outcome.error) {
       const err = outcome.error;
-      const reason = err.reason ?? errorReason(err);
+      // The gate not free in time (the controller slow on a request before): "no answer in time".
+      const reason = err.kind === ERROR_KINDS.LATE ? 'timeout' : (err.reason ?? errorReason(err));
       if (err.sent && !err.inLogin) {
         stop.written = true;
       }
@@ -1032,8 +1143,8 @@ export class WaterkotteApp {
     if (number < DHW_SETPOINT.min || number > DHW_CAP.max) {
       throw this.refusalError(ERRORS.outOfRange(DHW_SETPOINT.min, DHW_CAP.max));
     }
-    if (number > this.config.dhwCap) {
-      throw this.refusalError(ERRORS.dhwCap(this.config.dhwCap));
+    if (number > this.dhwCap) {
+      throw this.refusalError(ERRORS.dhwCap(this.dhwCap));
     }
     return {
       expected: number * 10,
@@ -1057,7 +1168,7 @@ export class WaterkotteApp {
       return this.stopCommand(role, received);
     }
     const wanted = this.parseCommand(role, value);
-    if (!this.config.allowCommands) {
+    if (!this.allowCommands) {
       throw this.refusalError(ERRORS.disabled);
     }
     if (!this.client) {
@@ -1090,7 +1201,7 @@ export class WaterkotteApp {
 
   /** The checks before sending, on the latest configuration and the latest stops. */
   checkCommand(generation, client, role, seq, wanted) {
-    if (!this.config.allowCommands) {
+    if (!this.allowCommands) {
       throw this.refusalError(ERRORS.disabled);
     }
     if (generation !== this.generation || client !== this.client) {
@@ -1107,8 +1218,8 @@ export class WaterkotteApp {
         throw this.refusalError(ERRORS.stopPending);
       }
       // The ceiling may have been lowered since the command arrived.
-      if (wanted.degrees > this.config.dhwCap || wanted.degrees > DHW_CAP.max) {
-        throw this.refusalError(ERRORS.dhwCap(this.config.dhwCap));
+      if (wanted.degrees > this.dhwCap || wanted.degrees > DHW_CAP.max) {
+        throw this.refusalError(ERRORS.dhwCap(this.dhwCap));
       }
     }
   }

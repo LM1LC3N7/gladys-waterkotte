@@ -49,6 +49,8 @@ export function fakePump({ clock, password = PASSWORD, maxSessions = 2, tags = b
     latency: 0,
     /** Requests matching this RegExp get no answer at all (socket stays open). */
     silent: undefined,
+    /** Requests matching this RegExp are handled on arrival, answered after the latency. */
+    early: undefined,
     /** Connections are refused. */
     refuse: false,
     /** Writes are acknowledged, applied `applyDelay` ms later (Infinity: never). */
@@ -179,9 +181,10 @@ export function fakePump({ clock, password = PASSWORD, maxSessions = 2, tags = b
           });
           return true;
         }
+        const early = pump.early?.test(path) ? pump.handle(path, headers) : undefined;
         const answer = () => {
           if (destroyed) return;
-          const { status, body, headers: h = {} } = pump.handle(path, headers);
+          const { status, body, headers: h = {} } = early ?? pump.handle(path, headers);
           const payload = ' '.repeat(pump.bigBody) + body;
           const head = [`HTTP/1.1 ${status} X`, `Content-Length: ${Buffer.byteLength(payload)}`];
           for (const [k, v] of Object.entries(h)) head.push(`${k}: ${v}`);

@@ -39,6 +39,9 @@ up to date at the end of every milestone.
   (ha-waterkotte README): does the logout free it at once?
 - The delay between a write and its read back (here at once, then 5 and
   20 s).
+- The frost protection of the controller while heating is Off: a stop never
+  written may still leave up to 15 minutes after the click, once, over a
+  setting made on the controller in between (docs say so).
 - How many sessions the controller accepts, and how long it keeps one idle.
 - EasyCon: the XML format, the ranges, whether Basic auth is needed.
 
@@ -101,11 +104,16 @@ up to date at the end of every milestone.
   writes the stops never written first, then reads and judges the others.
   A stop never written is never dropped before its deadline, even when two
   reads after the click show a change (reviewer's m1 r2, overruled by the
-  coordinator's rule). `lastWrites` (older Gladys command) counts 90 s.
+  coordinator's rule): it may leave up to 15 minutes after the click, once,
+  over a setting made in between (said in the docs, r3). `lastWrites` (older
+  Gladys command) counts 90 s.
   Saving the configuration during an Off: no client is current while the
   old one logs out; the Off waits for the new one (its first round writes
-  it), the old client gives its gate back at once and a closed client sends
-  nothing. A /data date in the
+  it and reads it back: the Off answers from that read back, 4.6 s after the
+  click at most; no address then: "not configured", kept; EasyCon then:
+  refused, not kept), the old client gives its gate back at once and a
+  closed client sends nothing. An Off whose gate is not free in time says
+  "no answer in time" (never "too late"). A /data date in the
   future is invalid. A login that did not leave gives its turn back; a login
   error is never "sent" nor counted as a write. At start, the kept stops go
   before the first poll (a read of I30/I32 then the writes). Refused only:
@@ -113,6 +121,17 @@ up to date at the end of every milestone.
   sent with the refused password), nothing written in 3 s (kept). With `getConfig()` failing
   the address and password are unknown (never kept in /data): the stop waits
   for the configuration.
+- **Configurations applied one at a time** (review r3): the SDK runs its
+  messages concurrently; a save and the `getConfig()` of a reconnection only
+  record the latest configuration received (`wanted`) and one loop applies
+  them in order. A restart reads the latest one once the previous client
+  logged out (one saved meanwhile wins); the rest (option, ceiling,
+  language) applies at once, never overwritten by an older restart. Until
+  it is applied, a newer configuration already restricts the option and the
+  ceiling (the stricter of the two). A `getConfig()` answer is not applied
+  when a save arrived while it ran (it may be older). Shut down during a
+  restart: no new client; the logout looks at the session once the gate is
+  held (a login in flight is ended too).
 - **Sensitive commands**: option checked on arrival and in `beforeSend`;
   values strict (`'' `, `null`, `'1e2'`, fractions refused); setpoint
   28 °C to the ceiling (55 by default, 40–60, rounded down, never above 60)

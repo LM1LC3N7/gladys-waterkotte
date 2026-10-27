@@ -42,7 +42,8 @@ The controller accepts few sessions at once (two according to ha-waterkotte;
 its web page open in a browser uses one) and closes an idle one after about 5
 minutes: after a restart of Gladys, the previous session may stay taken that
 long. Gladys keeps a single session open, ends it when it stops or when the
-configuration changes, and logs in again at most once
+configuration changes (saved several times in a row: applied one after the
+other, the last one saved wins), and logs in again at most once
 per read or per command, never in a loop. When the controller answers "too
 many users", Gladys pauses for 1 minute, then 2, 4... up to 6 hours, and says
 so in the configuration screen. When it refuses the user name or the
@@ -63,7 +64,9 @@ back:
   value someone else set after the click (on the controller, its web page);
   an older command of Gladys does not count. A stop not written yet is tried
   again 10 seconds later, then every minute; during a pause too, until its
-  15 minutes (one login a minute at most).
+  15 minutes (one login a minute at most). Such a stop can thus leave up to
+  15 minutes after the click, once, over a setting made on the controller
+  in between.
 
 Off is refused, nothing sent, in these cases only:
 
