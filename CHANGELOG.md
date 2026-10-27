@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-27
+
 ### Added
 
 - First version: Waterkotte heat pumps (EcoTouch, and EasyCon read only)
@@ -22,3 +24,6 @@ the notes of the version's GitHub Release.
   most).
 - One session kept with the controller, "too many users" handled as a pause,
   refused credentials never retried by themselves.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-waterkotte/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-waterkotte/releases/tag/v0.1.1

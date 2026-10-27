@@ -1,6 +1,6 @@
 {
   "name": "gladys-waterkotte",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for Waterkotte heat pumps (EcoTouch, EasyCon) through their local web interface: temperatures, state, compressor, hot water, optional commands with a capped hot water setpoint and an always-allowed Off. Unofficial, not affiliated with Waterkotte.",
   "type": "module",
