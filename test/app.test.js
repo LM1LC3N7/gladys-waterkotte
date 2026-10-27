@@ -322,6 +322,167 @@ test('an HTTP 401 or 403 of EcoTouch is not a refusal of the credentials', async
   assert.match(message(gladys).fr, /statut HTTP inattendu/);
 });
 
+test('a lost session answered with HTTP 500 + #E_NEED_LOGIN: one login, never a pause (poll and Off)', async (t) => {
+  const { pump, command, advance, gladys, app } = await setup(t);
+  pump.needLoginStatus = 500;
+  pump.expire();
+  assert.deepEqual(await command('heating-mode', 'off', { wait: 3000 }), { success: true });
+  assert.equal(pump.tags.I30, '0');
+  pump.expire();
+  await advance(61 * SECOND);
+  assert.equal(pump.count(/login/), 3);
+  assert.equal(app.pause, undefined);
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+});
+
+test('Off not sent, the value changed before the click: written by the next read, never dropped unwritten', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { command, advance } = await setup(t, { pump, clock });
+  pump.tags.I30 = '2';
+  pump.refuse = true;
+  const ack = await command('heating-mode', 'off', { wait: 3500 });
+  assert.match(ack.error, /Arrêt non envoyé/);
+  pump.refuse = false;
+  await advance(61 * SECOND, SECOND);
+  assert.deepEqual(writes(pump), ['I30=0']);
+  assert.equal(pump.tags.I30, '0');
+});
+
+test('a scene Auto then Off on a slow controller: the older Auto does not cancel the Off', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { gladys, device, advance } = await setup(t, { pump, clock, config: ALLOWED });
+  pump.tags.I30 = '2';
+  pump.latency = (path) => (path.startsWith('/cgi/writeTags') ? 3300 : 0);
+  const d = device();
+  const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+  const auto = gladys.fake.setValue(d, target, 'auto');
+  await advance(100, 50);
+  const off = gladys.fake.setValue(d, target, 'off');
+  await advance(5000);
+  assert.deepEqual(await auto, { success: true });
+  assert.match((await off).error, /Arrêt non envoyé/);
+  pump.latency = 0;
+  await advance(2 * MINUTE, SECOND);
+  assert.equal(pump.tags.I30, '0');
+});
+
+test('Off written, then an older Auto of Gladys applied late: not "someone else", the stop is written again', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { gladys, device, advance } = await setup(t, { pump, clock, config: ALLOWED });
+  pump.tags.I30 = '2';
+  // Auto applied 3 s late (after the Off was read back); the first Off is lost.
+  let offs = 0;
+  pump.applyDelay = (w) =>
+    w.I30 === '1' ? 3 * SECOND : w.I30 === '0' && (offs += 1) === 1 ? Infinity : 0;
+  const d = device();
+  const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+  const auto = gladys.fake.setValue(d, target, 'auto');
+  await advance(100, 50);
+  const off = gladys.fake.setValue(d, target, 'off');
+  await advance(2500);
+  assert.match((await auto).error, /pas encore appliquée/);
+  assert.match((await off).error, /pas encore appliqué/);
+  await advance(2 * MINUTE, SECOND);
+  assert.equal(pump.tags.I30, '0');
+});
+
+test('a stop arriving during a round of kept stops is not judged on the round read', async (t) => {
+  const clock = testClock();
+  const now = clock.now();
+  const store = createMemoryStore({
+    stops: [
+      { role: 'heating-mode', from: 1, at: now - MINUTE, deadline: now + 10 * MINUTE, sends: 0 },
+    ],
+  });
+  const pump = fakePump({ clock });
+  pump.latency = (path) => (path.startsWith('/cgi/readTags') ? 600 : 0);
+  const { gladys, advance } = await setup(t, {
+    pump,
+    clock,
+    store,
+    create: false,
+    connectGladys: false,
+  });
+  await gladys.connect();
+  await advance(300, 50);
+  const d = { external_id: DEVICE, features: [{ external_id: feature('dhw-mode') }] };
+  const off = gladys.fake.setValue(d, d.features[0], 'off');
+  await advance(4000, 50);
+  assert.deepEqual(await off, { success: true });
+  const dhwWrites = pump.writes().filter((r) => Object.values(r.query).includes('I32')).length;
+  assert.equal(dhwWrites, 1);
+});
+
+test('Off without a session and the network down for 0.5 s: logs in and writes within its budget', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { gladys, device, advance, app } = await setup(t, { pump, clock });
+  app.client.cookie = undefined;
+  pump.refuse = true;
+  const d = device();
+  const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+  const ack = gladys.fake.setValue(d, target, 'off');
+  await advance(500, 50);
+  pump.refuse = false;
+  await advance(3000);
+  assert.deepEqual(await ack, { success: true });
+});
+
+test('a login refused "too many users" during an Off: "not sent", and not counted as a write', async (t) => {
+  const clock = testClock();
+  const store = createMemoryStore();
+  const pump = fakePump({ clock, maxSessions: 1 });
+  const { command } = await setup(t, { pump, clock, store });
+  pump.expire();
+  pump.sessions.add('browser');
+  const ack = await command('heating-mode', 'off', { wait: 3500 });
+  assert.match(ack.error, /Arrêt non envoyé \(trop de sessions\)/);
+  // The write met "#E_NEED_LOGIN" (nothing applied), then the login was refused.
+  assert.equal(pump.tags.I30, '1');
+  assert.equal(store.data.stops[0].written, false);
+});
+
+test('a stop is dropped at its deadline even when every read fails, and the pause is kept', async (t) => {
+  const clock = testClock();
+  const store = createMemoryStore();
+  const pump = fakePump({ clock, maxSessions: 1 });
+  const { command, advance } = await setup(t, { pump, clock, store });
+  pump.expire();
+  pump.sessions.add('browser');
+  await command('heating-mode', 'off', { wait: 3500 });
+  await advance(16 * MINUTE, 5 * SECOND);
+  assert.deepEqual(store.data.stops, []);
+  // The pause reads (1, 3, 7, 15 min) and 3 rounds for the stop at most.
+  assert.ok(pump.count(/login/) <= 10, String(pump.count(/login/)));
+  const logins = pump.count(/login/);
+  await advance(60 * MINUTE, 10 * SECOND);
+  // Only the reads of the doubled pause (2, 4, 8, 16, 32 min...): a handful, not one a minute.
+  assert.ok(pump.count(/login/) - logins <= 3, String(pump.count(/login/) - logins));
+});
+
+test('the deadline of a stop follows the monotonic clock, not the wall clock', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { command, app } = await setup(t, { pump, clock });
+  pump.applyDelay = Infinity;
+  await command('heating-mode', 'off', { wait: 3000 });
+  const stop = app.stops.get('heating-mode');
+  assert.ok(stop.deadlineMono > clock.monotonic());
+  assert.equal(stop.deadline, undefined);
+});
+
+test('an invalid address is never shown back (it may carry a password)', async (t) => {
+  const { gladys } = await setup(t, {
+    config: { address: 'http://waterkotte:S3cret@192.168.1.50', password: PASSWORD },
+    create: false,
+  });
+  assert.doesNotMatch(JSON.stringify(message(gladys)), /S3cret/);
+  assert.match(message(gladys).fr, /adresse saisie n'est pas valide/);
+});
+
 test('Off with refused credentials: nothing sent, the refused password never sent again', async (t) => {
   const clock = testClock();
   const pump = fakePump({ clock });

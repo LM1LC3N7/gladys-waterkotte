@@ -38,8 +38,11 @@ network.
 
 ### Sessions
 
-The controller accepts few sessions at once (its web page open in a browser
-uses one). Gladys keeps a single session open and logs in again at most once
+The controller accepts few sessions at once (two according to ha-waterkotte;
+its web page open in a browser uses one) and closes an idle one after about 5
+minutes: after a restart of Gladys, the previous session may stay taken that
+long. Gladys keeps a single session open, ends it when it stops or when the
+configuration changes, and logs in again at most once
 per read or per command, never in a loop. When the controller answers "too
 many users", Gladys pauses for 1 minute, then 2, 4... up to 6 hours, and says
 so in the configuration screen. When it refuses the user name or the
@@ -53,10 +56,13 @@ the commands" option, a pause or a read in progress. It is written, then read
 back:
 
 - read back Off: done;
-- otherwise Gladys answers "sent, without confirmation" or "not applied yet",
-  keeps the stop (also across a restart) and writes it again with the next
-  reads, 3 times at most and for 15 minutes at most; it is not written again
-  over a value set since by someone else (on the controller, its web page).
+- otherwise Gladys answers "not sent", "sent, without confirmation" or "not
+  applied yet", keeps the stop (also across a restart) and writes it with the
+  next reads: written again 3 times at most, and dropped 15 minutes after the
+  click whatever the reads. Once written, it is not written again over a
+  value someone else set after the click (on the controller, its web page);
+  an older command of Gladys does not count. During a pause, the stop still
+  gets 3 tries at most.
 
 Off is refused, nothing sent, in these cases only:
 
@@ -65,8 +71,9 @@ Off is refused, nothing sent, in these cases only:
   soon as the configuration is complete (15 minutes at most);
 - the heat pump refused the credentials before: the stop is kept and written
   once they are corrected (15 minutes at most);
-- nothing could be sent within 3 seconds (no answer, network down): the stop
-  is kept and written by the next reads.
+- nothing could be written within 3 seconds (no answer, network down, a
+  login refused "too many users"): the stop is kept and written by the next
+  reads.
 
 **Auto**, **Manual** and the **hot water setpoint** are refused unless you
 turn on **Allow the commands** (off by default). Then:

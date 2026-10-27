@@ -30,8 +30,13 @@ up to date at the end of every milestone.
   any other code is shown as unknown and blocks Auto/Manual.
 - The serial number (I114, I115): readable on every firmware? Constant?
 - A17 (room): -3276.8 °C without a sensor here (filtered as out of range).
-- Whether "#E_NEED_LOGIN" also comes as HTTP 500 (ha-waterkotte logs in
-  again on a 500): here a 5xx is a pause, not a login.
+- "#E_NEED_LOGIN" comes in a 200 or a 500 (ha-waterkotte `already_auth`,
+  commit 9bc0001): both are a lost session here (one login); another 5xx is a
+  pause and forgets the session. The global statuses are read as
+  ha-waterkotte does (body starting with "#" and a status, compared by
+  prefix): to confirm on the controller.
+- The controller accepts 2 sessions and ends an idle one in about 5 minutes
+  (ha-waterkotte README): does the logout free it at once?
 - The delay between a write and its read back (here at once, then 5 and
   20 s).
 - How many sessions the controller accepts, and how long it keeps one idle.
@@ -55,14 +60,14 @@ up to date at the end of every milestone.
   gate back before its next request and cuts a read silent for 1 s or more
   (not counted as a failure). A command keeps the gate from its fresh read
   to its read back.
-- **Session**: one login, the cookie kept; "#E_NEED_LOGIN" logs in again at
-  most once per poll, command or stop; "#E_TOO_MANY_USERS" or an HTTP 5xx is a
-  pause (1 min doubled to 6 h, in /data, not applied to stops);
+- **Session**: one login, the cookie kept; "#E_NEED_LOGIN" (HTTP 200 or 500) logs in again at most once per poll, command or stop;
+  "#E_TOO_MANY_USERS" or another HTTP 5xx is a pause (1 min doubled to 6 h, in /data, not applied to stops);
   "#E_PASS_DONT_MATCH" (EasyCon: HTTP 401) is a refusal: no automatic try,
   8 bits of a salted hash of the refused credentials in /data, lifted by new
   credentials or a successful click on "Test the connection" (one login per
   click, 10 s apart). The session is ended at shutdown and on a new
-  configuration (logout, 1 s).
+  configuration (logout after the request in flight, 5 s at most). The
+  status never shows a typed address (it may carry a password).
 - **Device**: `waterkotte:heatpump`, one per integration. The serial number
   (I114-I115) is in the params, not in the id (a firmware that does not give
   it never makes a second device); it is pinned by the created device's
@@ -84,12 +89,18 @@ up to date at the end of every milestone.
   retried every 250 ms within 3 s; read back. Not confirmed: kept in /data
   (role, value before, date, deadline 15 min, sends) and written by the next
   reads (all at once, a send counted only when it left, 3 at most); dropped
-  when a read shows Off, when the value changed to another one than before
-  the stop (someone set it), at its deadline, or after 3 sends; a /data date
-  in the future is invalid. At start, the kept stops go before the first
-  poll (a read of I30/I32 then the writes). Refused only: EasyCon, no
-  configuration (kept), credentials refused before (kept, never sent with the
-  refused password), nothing sent in 3 s (kept). With `getConfig()` failing
+  when a read shows Off; at its deadline (monotonic in memory, wall clock
+  only in /data), whatever the reads; after 3 writes again; once written,
+  when a read that left after the click shows another value than the one
+  read after the click (`from`), unless an older command of Gladys wrote it.
+  A stop never written is never dropped by a read; a read that started
+  before the stop arrived does not judge it; a poll cut by the stop does not
+  write it. During a pause, 3 rounds at most per stop. A /data date in the
+  future is invalid. A login that did not leave gives its turn back; a login
+  error is never "sent" nor counted as a write. At start, the kept stops go
+  before the first poll (a read of I30/I32 then the writes). Refused only:
+  EasyCon, no configuration (kept), credentials refused before (kept, never
+  sent with the refused password), nothing written in 3 s (kept). With `getConfig()` failing
   the address and password are unknown (never kept in /data): the stop waits
   for the configuration.
 - **Sensitive commands**: option checked on arrival and in `beforeSend`;

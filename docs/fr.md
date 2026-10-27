@@ -40,8 +40,11 @@ pompe à chaleur sur un réseau de confiance.
 
 ### Sessions
 
-La régulation accepte peu de sessions à la fois (sa page web ouverte dans un
-navigateur en prend une). Gladys garde une seule session ouverte et se
+La régulation accepte peu de sessions à la fois (deux selon ha-waterkotte ;
+sa page web ouverte dans un navigateur en prend une) et ferme une session
+inactive après 5 minutes environ : après un redémarrage de Gladys, l'ancienne
+session peut rester prise aussi longtemps. Gladys garde une seule session
+ouverte, la ferme quand il s'arrête ou quand la configuration change, et se
 reconnecte au plus une fois par lecture ou par commande, jamais en boucle.
 Quand la régulation répond « trop d'utilisateurs », Gladys fait une pause de
 1 minute, puis 2, 4… jusqu'à 6 heures, et l'indique dans l'écran de
@@ -56,11 +59,14 @@ il ne dépend ni de l'option « Autoriser les commandes », ni d'une pause, ni
 d'une lecture en cours. Il est écrit, puis relu :
 
 - relu à l'Arrêt : fait ;
-- sinon Gladys répond « envoyé, sans confirmation » ou « pas encore
-  appliqué », garde l'arrêt (y compris après un redémarrage) et le réécrit
-  avec les lectures suivantes, 3 fois au plus et pendant 15 minutes au plus ;
-  il n'est pas réécrit par-dessus une valeur réglée depuis par quelqu'un
-  d'autre (sur la régulation, sa page web).
+- sinon Gladys répond « non envoyé », « envoyé, sans confirmation » ou « pas
+  encore appliqué », garde l'arrêt (y compris après un redémarrage) et
+  l'écrit avec les lectures suivantes : réécrit 3 fois au plus, et abandonné
+  15 minutes après le clic quelles que soient les lectures. Une fois écrit,
+  il n'est pas réécrit par-dessus une valeur réglée après le clic par
+  quelqu'un d'autre (sur la régulation, sa page web) ; une commande plus
+  ancienne de Gladys ne compte pas. Pendant une pause, l'arrêt a encore
+  3 essais au plus.
 
 L'Arrêt est refusé, rien n'est envoyé, dans ces cas seulement :
 
@@ -69,8 +75,9 @@ L'Arrêt est refusé, rien n'est envoyé, dans ces cas seulement :
   configuration est complète (15 minutes au plus) ;
 - la pompe à chaleur a refusé les identifiants auparavant : l'arrêt est gardé
   et écrit dès leur correction (15 minutes au plus) ;
-- rien n'a pu partir en 3 secondes (pas de réponse, réseau coupé) : l'arrêt
-  est gardé et écrit par les lectures suivantes.
+- rien n'a pu être écrit en 3 secondes (pas de réponse, réseau coupé,
+  connexion refusée « trop d'utilisateurs ») : l'arrêt est gardé et écrit
+  par les lectures suivantes.
 
 **Auto**, **Manuel** et la **consigne d'eau chaude** sont refusés tant que
 vous n'activez pas **Autoriser les commandes** (désactivé par défaut).

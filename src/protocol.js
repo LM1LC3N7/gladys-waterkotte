@@ -66,13 +66,19 @@ export function writePath(entries, stamp) {
   return `/cgi/writeTags?${parts.join('&')}`;
 }
 
-/** The status of the whole answer ("#S_OK", "#E_NEED_LOGIN"...), when its first line is one. */
+/**
+ * The status of the whole answer ("#S_OK", "#E_NEED_LOGIN"...): a body that
+ * starts with "#" and a status word (ha-waterkotte: `startswith("#E_NEED_LOGIN")`),
+ * compared by prefix, so "#E_NEED_LOGIN_X" is still a lost session. A tag
+ * line ("#A1<TAB>...") is not a status.
+ */
 export function globalStatus(body) {
-  const first = String(body ?? '')
-    .replace(/^\s+/, '')
-    .split(/\r?\n/, 1)[0];
-  const match = /^#([A-Z_]{1,40})\s*$/.exec(first ?? '');
-  return match ? match[1] : undefined;
+  const match = /^#([A-Z_]{2,40})(?![0-9A-Z_])/.exec(String(body ?? '').replace(/^\s+/, ''));
+  if (!match) {
+    return undefined;
+  }
+  const word = match[1];
+  return Object.values(GLOBAL).find((known) => word.startsWith(known)) ?? word;
 }
 
 /**

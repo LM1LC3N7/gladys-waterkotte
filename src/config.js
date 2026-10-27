@@ -138,8 +138,8 @@ export function normalizeConfig(raw = {}) {
   }
   return {
     address,
-    /** What was typed, when it is not a valid address (shown in the status). */
-    invalid: typed !== '' && !address ? typed.slice(0, 100).replace(CONTROL, '') : undefined,
+    /** The address typed is not valid (never shown: it may carry a password). */
+    invalid: typed !== '' && !address ? true : undefined,
     system,
     credentials,
     credentialsError,

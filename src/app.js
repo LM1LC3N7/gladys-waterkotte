@@ -71,16 +71,23 @@ function numberOf(value) {
   return undefined;
 }
 
-/** A login allowed once per poll or command: never a loop of logins. */
+/**
+ * A login allowed once per poll, command or stop: never a loop of logins. A
+ * login that did not leave (no connection) gives its turn back (`refund`).
+ */
 const once = () => {
   let used = false;
-  return () => {
+  const allow = () => {
     if (used) {
       return false;
     }
     used = true;
     return true;
   };
+  allow.refund = () => {
+    used = false;
+  };
+  return allow;
 };
 
 const isInt = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
@@ -131,6 +138,8 @@ export class WaterkotteApp {
     /** Commands: arrival numbers, the last stop number per target, the targets busy. */
     this.seq = 0;
     this.stopSeqs = new Map();
+    /** role -> { seq, code }: the last mode Gladys wrote (a stop is not "contradicted" by an older one). */
+    this.lastWrites = new Map();
     this.busy = new Set();
     /** role -> { from, expected, moved, until }: a sensitive command sent, not seen yet. */
     this.guards = new Map();
@@ -145,7 +154,11 @@ export class WaterkotteApp {
     this.storeReadable = readable;
     const wall = this.now();
     const mono = this.monotonic();
-    /** role -> { from, at, deadline, sends, seq } (seq 0: from /data, older than any click). */
+    /**
+     * role -> { seq, atMono, deadlineMono, written, sends, from, rounds }: seq 0
+     * comes from /data (older than any click); `from` is the value of a read
+     * that started after the stop arrived; `sends` the writes again that left.
+     */
     this.stops = new Map();
     for (const s of Array.isArray(data.stops) ? data.stops : []) {
       if (
@@ -159,11 +172,13 @@ export class WaterkotteApp {
         (s.from === undefined || s.from === null || isInt(s.from, 1, 255))
       ) {
         this.stops.set(s.role, {
-          from: s.from ?? undefined,
-          at: s.at,
-          deadline: s.deadline,
-          sends: s.sends,
           seq: 0,
+          atMono: mono - (wall - s.at),
+          deadlineMono: mono + (s.deadline - wall),
+          written: s.written === true,
+          sends: s.sends,
+          from: s.from ?? undefined,
+          rounds: 0,
         });
       }
     }
@@ -196,11 +211,13 @@ export class WaterkotteApp {
     const mono = this.monotonic();
     return {
       version: 1,
+      // Wall clock only here: the monotonic dates of the stops brought onto it.
       stops: [...this.stops].map(([role, s]) => ({
         role,
         ...(s.from === undefined ? {} : { from: s.from }),
-        at: s.at,
-        deadline: s.deadline,
+        at: wall - Math.max(0, mono - s.atMono),
+        deadline: wall + Math.max(0, s.deadlineMono - mono),
+        written: s.written,
         sends: s.sends,
       })),
       ...(this.refusal ? { refusal: this.refusal } : {}),
@@ -414,9 +431,13 @@ export class WaterkotteApp {
     }
     const mono = this.monotonic();
     let wait = this.dueAt(mono) - mono;
-    if (this.pauseLeft(mono) > 0 && this.stops.size > 0) {
-      // Stops do not wait for the end of a pause.
+    if (this.pauseLeft(mono) > 0 && this.pauseStops().length > 0) {
+      // Stops do not wait for the end of a pause (within their own tries).
       wait = Math.min(wait, this.interval);
+    }
+    for (const stop of this.stops.values()) {
+      // Woken at the deadline of a stop: it is dropped then, whatever the reads.
+      wait = Math.min(wait, stop.deadlineMono - mono);
     }
     const generation = this.generation;
     this.timer = this.timers.setTimeout(
@@ -448,8 +469,15 @@ export class WaterkotteApp {
       return;
     }
     const mono = this.monotonic();
+    if (this.purgeStops(mono)) {
+      await this.persist();
+    }
     if (this.pauseLeft(mono) > 0) {
-      if (this.stops.size > 0) {
+      const stops = this.pauseStops();
+      if (stops.length > 0) {
+        for (const stop of stops) {
+          stop.rounds += 1;
+        }
         await this.stopRound();
       }
       if (generation === this.generation) {
@@ -475,9 +503,11 @@ export class WaterkotteApp {
     try {
       read = await client.hold(PRIORITY.POLL, async (hold) => {
         const allowLogin = once();
+        // Stops arrived after this number are not judged on this read.
+        const readSeq = this.seq;
         const result = await client.read(hold, ALL_TAGS, { allowLogin });
-        if (this.stops.size > 0) {
-          await this.resendStops(hold, result, allowLogin);
+        if (this.stops.size > 0 && !hold.preempted) {
+          await this.resendStops(hold, result, allowLogin, readSeq);
         }
         return result;
       });
@@ -584,40 +614,76 @@ export class WaterkotteApp {
 
   // --- Stops (protective) ------------------------------------------------------------
 
-  /**
-   * Writes the stops kept, from a read of the operation tags `read`: a stop
-   * the read shows done is forgotten; one contradicted (the value changed
-   * to another than before the stop: someone set it since) is dropped; the
-   * others are written together, each checked against its deadline and its
-   * count (a send counts only when it left).
-   */
-  async resendStops(hold, read, allowLogin) {
-    const wall = this.now();
-    const entries = [];
+  /** Drops the stops past their deadline (monotonic), whatever the reads; true when one went. */
+  purgeStops(mono) {
     let changed = false;
     for (const [role, stop] of [...this.stops]) {
-      const { tag } = COMMANDS[role];
-      const entry = read.get(tag);
-      const code = entry?.status === 'ok' ? entry.value : undefined;
-      if (stop.at > wall || wall >= stop.deadline) {
+      if (mono >= stop.deadlineMono) {
         this.logger.warn(`Stop ${role} not confirmed within its time: dropped`);
         this.stops.delete(role);
         changed = true;
-      } else if (code === OPERATION_CODES.off) {
-        this.stops.delete(role);
-        changed = true;
-      } else if (code !== undefined && stop.from !== undefined && code !== stop.from) {
-        this.logger.warn(`Stop ${role}: changed to ${code} since, not written again`);
-        this.stops.delete(role);
-        changed = true;
-      } else if (stop.sends >= TIMINGS.stopResends) {
-        this.logger.warn(`Stop ${role} still not applied after ${stop.sends} writes: dropped`);
-        this.stops.delete(role);
-        changed = true;
-      } else {
-        // An unknown value: in doubt, the stop goes.
-        entries.push([role, tag]);
       }
+    }
+    return changed;
+  }
+
+  /** The stops a round during a pause may still try (as many rounds as writes again allowed). */
+  pauseStops() {
+    return [...this.stops.values()].filter(
+      (stop) => stop.rounds < TIMINGS.stopResends && this.monotonic() < stop.deadlineMono,
+    );
+  }
+
+  /**
+   * Writes the stops kept, from a read of the operation tags `read` that
+   * started when the arrival number was `readSeq` (a stop arrived later is
+   * not judged on it). A stop the read shows done is forgotten. The first
+   * read after a stop gives its `from`. A stop already written whose value
+   * then changed to another one, not by an older command of Gladys, was
+   * set by someone else: dropped. A stop never written is never dropped by a
+   * read. The others are written together; a write again counts only when
+   * it left, 3 at most.
+   */
+  async resendStops(hold, read, allowLogin, readSeq) {
+    const mono = this.monotonic();
+    const entries = [];
+    let changed = this.purgeStops(mono);
+    for (const [role, stop] of [...this.stops]) {
+      if (stop.seq > readSeq) {
+        continue;
+      }
+      const { tag } = COMMANDS[role];
+      const entry = read.get(tag);
+      const code = entry?.status === 'ok' ? entry.value : undefined;
+      if (code === OPERATION_CODES.off) {
+        this.stops.delete(role);
+        changed = true;
+        continue;
+      }
+      if (code !== undefined && stop.from === undefined) {
+        stop.from = code;
+        changed = true;
+      } else if (code !== undefined && code !== stop.from) {
+        const mine = this.lastWrites.get(role);
+        if (stop.written && !(mine && mine.seq < stop.seq && mine.code === code)) {
+          this.logger.warn(`Stop ${role}: set to ${code} by someone else since, not written again`);
+          this.stops.delete(role);
+          changed = true;
+          continue;
+        }
+        stop.from = code;
+        changed = true;
+      }
+      if (stop.written && stop.sends >= TIMINGS.stopResends) {
+        this.logger.warn(
+          `Stop ${role} still not applied after ${stop.sends} writes again: dropped`,
+        );
+        this.stops.delete(role);
+        changed = true;
+        continue;
+      }
+      // An unknown value: in doubt, the stop goes.
+      entries.push([role, tag]);
     }
     if (entries.length > 0) {
       try {
@@ -644,7 +710,10 @@ export class WaterkotteApp {
     for (const [role] of entries) {
       const stop = this.stops.get(role);
       if (stop) {
-        stop.sends += 1;
+        if (stop.written) {
+          stop.sends += 1;
+        }
+        stop.written = true;
       }
     }
   }
@@ -658,8 +727,9 @@ export class WaterkotteApp {
     try {
       await client.hold(PRIORITY.STOP, async (hold) => {
         const allowLogin = once();
+        const readSeq = this.seq;
         const read = await client.read(hold, MODE_TAGS, { allowLogin, keep: true });
-        await this.resendStops(hold, read, allowLogin);
+        await this.resendStops(hold, read, allowLogin, readSeq);
       });
     } catch (err) {
       if (err.reason === REASONS.BAD_PASSWORD) {
@@ -675,15 +745,15 @@ export class WaterkotteApp {
     this.stopSeqs.set(role, seq);
     this.guards.delete(role);
     const { tag, key } = COMMANDS[role];
-    const wall = this.now();
-    const before = this.values?.[key];
     const stop = {
-      // The value before the stop: a later read showing another one means someone set it since.
-      from: isInt(before, 1, 255) ? before : undefined,
-      at: wall,
-      deadline: wall + TIMINGS.stopKeep,
-      sends: 0,
       seq,
+      atMono: received,
+      deadlineMono: received + TIMINGS.stopKeep,
+      written: false,
+      sends: 0,
+      // Only a read that left after this click tells the value to compare with.
+      from: undefined,
+      rounds: 0,
     };
     this.stops.set(role, stop);
     const client = this.client;
@@ -701,7 +771,7 @@ export class WaterkotteApp {
     try {
       outcome = await client.hold(
         PRIORITY.STOP,
-        (hold) => this.stopSession(hold, client, tag, received, sendBy),
+        (hold) => this.stopSession(hold, client, tag, received, sendBy, stop),
         { startBy: sendBy },
       );
     } catch (err) {
@@ -711,13 +781,16 @@ export class WaterkotteApp {
     if (outcome.error) {
       const err = outcome.error;
       const reason = err.reason ?? errorReason(err);
+      if (err.sent && !err.inLogin) {
+        stop.written = true;
+      }
       if (reason === REASONS.BAD_PASSWORD) {
         await this.setRefusal();
       } else {
         await this.persist();
       }
-      this.logger.warn(`Stop ${role}: ${reason} (${err.sent ? 'sent' : 'not sent'})`);
-      if (err.sent) {
+      this.logger.warn(`Stop ${role}: ${reason} (${stop.written ? 'sent' : 'not sent'})`);
+      if (stop.written) {
         this.followUp();
         throw this.refusalError(ERRORS.stop.unconfirmed(reason));
       }
@@ -745,7 +818,7 @@ export class WaterkotteApp {
   }
 
   /** The write of a stop (retried every 250 ms until it leaves, within its budget), then its read back. */
-  async stopSession(hold, client, tag, received, sendBy) {
+  async stopSession(hold, client, tag, received, sendBy, stop) {
     const allowLogin = once();
     for (;;) {
       try {
@@ -755,11 +828,13 @@ export class WaterkotteApp {
           allowLogin,
           keep: true,
         });
+        stop.written = true;
         break;
       } catch (err) {
+        // Retried only when nothing reached the controller (no connection,
+        // login included: its turn is given back); anything else ends here.
         if (
-          err.sent ||
-          err.reason === REASONS.BAD_PASSWORD ||
+          err.kind !== ERROR_KINDS.UNREACHABLE ||
           this.monotonic() + TIMINGS.stopRetry >= sendBy
         ) {
           throw err;
@@ -774,7 +849,12 @@ export class WaterkotteApp {
         keep: true,
       });
       const entry = read.get(tag);
-      return { confirmed: entry?.status === 'ok' && entry.value === OPERATION_CODES.off };
+      const confirmed = entry?.status === 'ok' && entry.value === OPERATION_CODES.off;
+      if (!confirmed && entry?.status === 'ok') {
+        // Read after the click: the value a later read compares with.
+        stop.from = entry.value;
+      }
+      return { confirmed };
     } catch (err) {
       return { readError: err.reason ?? errorReason(err) };
     }
@@ -996,7 +1076,13 @@ export class WaterkotteApp {
         startBy: sendBy,
         answerBy: received + TIMINGS.commandAnswerBy,
         // The very last check, right before the bytes leave.
-        beforeSend: () => this.checkCommand(generation, client, role, seq, wanted),
+        beforeSend: () => {
+          this.checkCommand(generation, client, role, seq, wanted);
+          if (MODE_ROLES.includes(role)) {
+            // An older command of Gladys: a stop arriving later is not "contradicted" by it.
+            this.lastWrites.set(role, { seq, code: wanted.expected });
+          }
+        },
         allowLogin,
       });
     } catch (err) {
@@ -1194,7 +1280,7 @@ export class WaterkotteApp {
   status() {
     const c = this.config;
     if (!c.address) {
-      return [false, c.invalid ? join([T.noAddress, T.invalid(c.invalid)]) : T.noAddress];
+      return [false, c.invalid ? join([T.noAddress, T.invalid]) : T.noAddress];
     }
     if (c.credentialsError) {
       return [false, T.credentials[c.credentialsError]];

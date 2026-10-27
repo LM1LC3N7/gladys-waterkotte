@@ -254,9 +254,9 @@ export class WaterkotteClient {
     this.cookie = undefined;
     const { username, password } = this.credentials;
     const response = await hold.get(loginPath(username, password), options);
-    this.checkStatus(response);
+    // The status of the body first, whatever the HTTP code (some firmwares answer 500).
     const status = globalStatus(response.body);
-    if (status === GLOBAL.OK) {
+    if (status === GLOBAL.OK && response.status === 200) {
       // Some firmwares answer without a cookie: the session then rides on the address.
       this.cookie = cookiesOf(response.headers) ?? '';
       return;
@@ -267,14 +267,17 @@ export class WaterkotteClient {
     if (status === GLOBAL.TOO_MANY_USERS) {
       throw new ClientError(REASONS.TOO_MANY_USERS, { sent: true });
     }
+    this.checkStatus(response);
     throw new ClientError(REASONS.PROTOCOL, { sent: true });
   }
 
   /**
    * One EcoTouch request with the session: logs in first when there is
-   * none and `allowLogin` says so; on "#E_NEED_LOGIN", logs in once more and
-   * asks again when `allowLogin` is still true. `allowLogin()` is asked each
-   * time (the app counts the logins). Returns the body.
+   * none and `allowLogin()` says so; on "#E_NEED_LOGIN" (in a 200 or a 5xx,
+   * as ha-waterkotte reads it), logs in once more and asks again when
+   * `allowLogin()` still says so. A login that did not leave gives its turn
+   * back (`allowLogin.refund`). An error of the login is never "sent": only
+   * the request itself counts. Returns the body.
    */
   async withSession(hold, path, options, allowLogin) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -282,16 +285,29 @@ export class WaterkotteClient {
         if (!allowLogin()) {
           throw new ClientError(REASONS.NEED_LOGIN);
         }
-        await this.login(hold, { ...options, beforeSend: undefined, write: false });
+        try {
+          await this.login(hold, { ...options, beforeSend: undefined, write: false });
+        } catch (err) {
+          if (!err.sent) {
+            allowLogin.refund?.();
+          }
+          err.sent = false;
+          err.inLogin = true;
+          throw err;
+        }
       }
       const response = await hold.get(path, { ...options, auth: 'cookie' });
-      this.checkStatus(response);
       const status = globalStatus(response.body);
       if (status === GLOBAL.NEED_LOGIN) {
         // Nothing was read nor written: the session is gone.
         this.cookie = undefined;
         continue;
       }
+      if (response.status >= 500) {
+        // The next attempt logs in again (once): a session may be what failed.
+        this.cookie = undefined;
+      }
+      this.checkStatus(response);
       if (status === GLOBAL.TOO_MANY_USERS) {
         throw new ClientError(REASONS.TOO_MANY_USERS, { sent: true });
       }
@@ -338,12 +354,16 @@ export class WaterkotteClient {
     );
   }
 
-  /** Ends the session (best effort, 1 s), so that it does not hold one of the few the controller accepts. */
+  /**
+   * Ends the session (best effort), so that it does not hold one of the two
+   * the controller accepts: after the request in flight (5 s at most), 1 s
+   * for the answer.
+   */
   async logout() {
     if (this.system !== SYSTEMS.ECOTOUCH || !this.cookie || this.closed) {
       return;
     }
-    const startBy = this.monotonic() + TIMINGS.stalled;
+    const startBy = this.monotonic() + TIMINGS.requestTimeout;
     try {
       await this.hold(
         PRIORITY.COMMAND,

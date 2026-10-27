@@ -97,8 +97,10 @@ export const T = {
     'Enter the IP address of the heat pump (its web page) in the configuration.',
     "Saisissez l'adresse IP de la pompe à chaleur (sa page web) dans la configuration.",
   ),
-  invalid: (typed) =>
-    both(`"${typed}" is not a valid address.`, `« ${typed} » n'est pas une adresse valide.`),
+  invalid: both(
+    'The address typed is not valid (an IPv4 address or a host name, with an optional port).',
+    "L'adresse saisie n'est pas valide (une adresse IPv4 ou un nom d'hôte, avec un port en option).",
+  ),
   credentials: {
     missing: both(
       'Enter the password of the web page of the heat pump.',

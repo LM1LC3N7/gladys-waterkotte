@@ -57,6 +57,8 @@ export function fakePump({ clock, password = PASSWORD, maxSessions = 2, tags = b
     status5xx: 0,
     /** Every answer is padded with this many bytes. */
     bigBody: 0,
+    /** The HTTP status of "#E_NEED_LOGIN" (some firmwares answer 500). */
+    needLoginStatus: 200,
     /** Tags that answer E_INACTIVETAG. */
     inactive: new Set(),
     count: (re) => pump.requests.filter((r) => re.test(r.path)).length,
@@ -114,12 +116,12 @@ export function fakePump({ clock, password = PASSWORD, maxSessions = 2, tags = b
           return { status: 200, body: '#S_OK\n' };
         case '/cgi/readTags':
           if (!pump.sessions.has(cookie)) {
-            return { status: 200, body: '#E_NEED_LOGIN\n' };
+            return { status: pump.needLoginStatus, body: '#E_NEED_LOGIN\n' };
           }
           return { status: 200, body: tagsOf(asked(), pump.tags) };
         case '/cgi/writeTags': {
           if (!pump.sessions.has(cookie)) {
-            return { status: 200, body: '#E_NEED_LOGIN\n' };
+            return { status: pump.needLoginStatus, body: '#E_NEED_LOGIN\n' };
           }
           const names = asked();
           const written = {};
@@ -127,10 +129,12 @@ export function fakePump({ clock, password = PASSWORD, maxSessions = 2, tags = b
             written[t] = query[`v${i + 1}`];
           });
           const apply = () => Object.assign(pump.tags, written);
-          if (pump.applyDelay === 0) {
+          const delay =
+            typeof pump.applyDelay === 'function' ? pump.applyDelay(written) : pump.applyDelay;
+          if (delay === 0) {
             apply();
-          } else if (Number.isFinite(pump.applyDelay)) {
-            clock.timers.setTimeout(apply, pump.applyDelay);
+          } else if (Number.isFinite(delay)) {
+            clock.timers.setTimeout(apply, delay);
           }
           return { status: 200, body: tagsOf(names, written) };
         }
