@@ -1,61 +1,102 @@
-# Demo Devices Template
+# Waterkotte
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Shows a Waterkotte heat pump in Gladys through the local web interface of its
+controller (EcoTouch, or the older EasyCon), without any cloud. Unofficial:
+not affiliated with Waterkotte. **Never tested with a real heat pump**: it was
+written from the open source Home Assistant integration
+[ha-waterkotte](https://github.com/marq24/ha-waterkotte) and tested against a
+simulated controller. Please report what you see on yours.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+One device, "Waterkotte heat pump", with what its controller gives:
 
-## Configuration
+- temperatures: outside, flow, return and return target, heating demand,
+  source inlet and outlet, buffer tank, room (when a sensor is connected),
+  hot water and hot water demand;
+- compressor running, heating hot water, alarm;
+- electric power (kW), heat output (kW), COP;
+- **Heating** and **Hot water**: Off, Auto or Manual;
+- **Hot water setpoint** (°C).
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+The values are read every 60 seconds (30 to 600, in the configuration).
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+## Setting up
 
-## Actions
+1. Find the IP address of the heat pump (its web page) and give it a fixed
+   address in your router.
+2. In Gladys, open the integration's configuration: enter the address, choose
+   the controller (**EcoTouch** when the web page asks for a password, even
+   when it shows "EasyCon"; **EasyCon** for the older controllers without a
+   login page), the user name (`waterkotte` unless your installer changed it)
+   and the password of the web page. Save.
+3. Add the heat pump from the **Discovery** tab.
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+The password is kept by Gladys in its database, never shown again, sent only
+to the heat pump. The web page is plain HTTP: keep the heat pump on a trusted
+network.
 
-## Scenes
+### Sessions
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+The controller accepts few sessions at once (its web page open in a browser
+uses one). Gladys keeps a single session open and logs in again at most once
+per read or per command, never in a loop. When the controller answers "too
+many users", Gladys pauses for 1 minute, then 2, 4... up to 6 hours, and says
+so in the configuration screen. When it refuses the user name or the
+password, Gladys stops trying: correct them and save, or click **Test the
+connection** (one try per click).
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+## Commands
 
-## Dashboard
+**Off** (heating or hot water) is a stop: it does not depend on the "Allow
+the commands" option, a pause or a read in progress. It is written, then read
+back:
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+- read back Off: done;
+- otherwise Gladys answers "sent, without confirmation" or "not applied yet",
+  keeps the stop (also across a restart) and writes it again with the next
+  reads, 3 times at most and for 15 minutes at most; it is not written again
+  over a value set since by someone else (on the controller, its web page).
 
-## Troubleshooting
+Off is refused, nothing sent, in these cases only:
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+- the controller is EasyCon (read only in this integration);
+- the address or the password is missing: the stop is kept and written as
+  soon as the configuration is complete (15 minutes at most);
+- the heat pump refused the credentials before: the stop is kept and written
+  once they are corrected (15 minutes at most);
+- nothing could be sent within 3 seconds (no answer, network down): the stop
+  is kept and written by the next reads.
+
+**Auto**, **Manual** and the **hot water setpoint** are refused unless you
+turn on **Allow the commands** (off by default). Then:
+
+- the hot water setpoint takes whole degrees from 28 °C to the ceiling of
+  the configuration, **55 °C by default**, 40 to 60 °C (never more than
+  60 °C, whatever is typed): scalding risk;
+- each command reads the value and the serial number of the heat pump just
+  before writing, and succeeds only when a read back shows the value asked;
+- a command refused or cancelled says "nothing sent"; one sent without an
+  answer says "sent, without confirmation" and the value is read again 5 and
+  20 seconds later;
+- a command clicked before an Off of the same value (or a hot water setpoint
+  clicked before a hot water Off) never leaves after it.
+
+The integration has no switch: a "turn everything off" of a voice assistant
+or a scene never reaches the heat pump.
+
+## Limits
+
+- One heat pump per integration. Its serial number is checked at every read
+  and before every command: when another heat pump answers at the address,
+  nothing is published and the commands other than Off are refused.
+- The controller answers one request at a time: when it is slow (more than
+  about half a second per request), a scene changing several values at once
+  may see the last ones refused "did not answer in time, nothing sent".
+- EasyCon: read only, and its tags are those of EcoTouch (unchecked).
+- The tag list comes from ha-waterkotte; Waterkotte publishes none.
+
+## Credits
+
+Built on the work of Matthias Marquardt and the contributors of
+[ha-waterkotte](https://github.com/marq24/ha-waterkotte) (MIT).

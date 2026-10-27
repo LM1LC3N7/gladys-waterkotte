@@ -1,67 +1,111 @@
-# Template de démonstration
+# Waterkotte
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Affiche une pompe à chaleur Waterkotte dans Gladys par l'interface web locale
+de sa régulation (EcoTouch, ou l'ancienne EasyCon), sans cloud. Non officiel :
+sans lien avec Waterkotte. **Jamais testé avec une vraie pompe à chaleur** :
+écrit à partir de l'intégration Home Assistant libre
+[ha-waterkotte](https://github.com/marq24/ha-waterkotte) et testé avec une
+régulation simulée. Merci de signaler ce que vous voyez sur la vôtre.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+Un appareil, « Pompe à chaleur Waterkotte », avec ce que sa régulation donne :
 
-## Configuration
+- températures : extérieure, départ, retour et consigne de retour,
+  température demandée (chauffage), entrée et sortie source, ballon tampon,
+  pièce (si une sonde est branchée), eau chaude et température demandée
+  (eau chaude) ;
+- compresseur en marche, production d'eau chaude, alarme ;
+- puissance électrique (kW), puissance thermique (kW), COP ;
+- **Chauffage** et **Eau chaude** : Arrêt, Auto ou Manuel ;
+- **Consigne d'eau chaude** (°C).
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+Les valeurs sont lues toutes les 60 secondes (30 à 600, dans la configuration).
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+## Mise en place
 
-## Actions
+1. Trouvez l'adresse IP de la pompe à chaleur (sa page web) et donnez-lui une
+   adresse fixe dans votre routeur.
+2. Dans Gladys, ouvrez la configuration de l'intégration : saisissez
+   l'adresse, choisissez la régulation (**EcoTouch** si la page web demande un
+   mot de passe, même si elle affiche « EasyCon » ; **EasyCon** pour les
+   anciennes régulations sans page de connexion), le nom d'utilisateur
+   (`waterkotte` sauf si votre installateur l'a changé) et le mot de passe de
+   la page web. Enregistrez.
+3. Ajoutez la pompe à chaleur depuis l'onglet **Découverte**.
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+Le mot de passe est gardé par Gladys dans sa base, jamais réaffiché, envoyé
+seulement à la pompe à chaleur. La page web est en HTTP simple : gardez la
+pompe à chaleur sur un réseau de confiance.
 
-## Scènes
+### Sessions
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+La régulation accepte peu de sessions à la fois (sa page web ouverte dans un
+navigateur en prend une). Gladys garde une seule session ouverte et se
+reconnecte au plus une fois par lecture ou par commande, jamais en boucle.
+Quand la régulation répond « trop d'utilisateurs », Gladys fait une pause de
+1 minute, puis 2, 4… jusqu'à 6 heures, et l'indique dans l'écran de
+configuration. Quand elle refuse le nom d'utilisateur ou le mot de passe,
+Gladys arrête d'essayer : corrigez-les puis enregistrez, ou cliquez sur
+**Tester la connexion** (un essai par clic).
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+## Commandes
 
-## Tableau de bord
+L'**Arrêt** (chauffage ou eau chaude) est une commande de mise à l'arrêt :
+il ne dépend ni de l'option « Autoriser les commandes », ni d'une pause, ni
+d'une lecture en cours. Il est écrit, puis relu :
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+- relu à l'Arrêt : fait ;
+- sinon Gladys répond « envoyé, sans confirmation » ou « pas encore
+  appliqué », garde l'arrêt (y compris après un redémarrage) et le réécrit
+  avec les lectures suivantes, 3 fois au plus et pendant 15 minutes au plus ;
+  il n'est pas réécrit par-dessus une valeur réglée depuis par quelqu'un
+  d'autre (sur la régulation, sa page web).
 
-## Dépannage
+L'Arrêt est refusé, rien n'est envoyé, dans ces cas seulement :
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+- la régulation est une EasyCon (lecture seule dans cette intégration) ;
+- l'adresse ou le mot de passe manque : l'arrêt est gardé et écrit dès que la
+  configuration est complète (15 minutes au plus) ;
+- la pompe à chaleur a refusé les identifiants auparavant : l'arrêt est gardé
+  et écrit dès leur correction (15 minutes au plus) ;
+- rien n'a pu partir en 3 secondes (pas de réponse, réseau coupé) : l'arrêt
+  est gardé et écrit par les lectures suivantes.
+
+**Auto**, **Manuel** et la **consigne d'eau chaude** sont refusés tant que
+vous n'activez pas **Autoriser les commandes** (désactivé par défaut).
+Ensuite :
+
+- la consigne d'eau chaude prend des degrés entiers de 28 °C au plafond de la
+  configuration, **55 °C par défaut**, de 40 à 60 °C (jamais plus de 60 °C,
+  quoi qu'on saisisse) : risque de brûlure ;
+- chaque commande lit la valeur et le numéro de série de la pompe à chaleur
+  juste avant d'écrire, et ne réussit que si une relecture montre la valeur
+  demandée ;
+- une commande refusée ou annulée dit « rien envoyé » ; une commande partie
+  sans réponse dit « envoyée, sans confirmation » et la valeur est relue 5 et
+  20 secondes plus tard ;
+- une commande cliquée avant un Arrêt de la même valeur (ou une consigne
+  d'eau chaude cliquée avant un Arrêt de l'eau chaude) ne part jamais après
+  lui.
+
+L'intégration n'a aucun interrupteur : un « tout éteindre » d'un assistant
+vocal ou d'une scène n'atteint pas la pompe à chaleur.
+
+## Limites
+
+- Une pompe à chaleur par intégration. Son numéro de série est vérifié à
+  chaque lecture et avant chaque commande : si une autre pompe à chaleur
+  répond à l'adresse, rien n'est publié et les commandes autres que l'Arrêt
+  sont refusées.
+- La régulation répond à une requête à la fois : si elle est lente (plus
+  d'une demi-seconde environ par requête), une scène qui change plusieurs
+  valeurs d'un coup peut voir les dernières refusées « pas de réponse à
+  temps : rien envoyé ».
+- EasyCon : lecture seule, et ses tags sont ceux d'EcoTouch (non vérifiés).
+- La liste des tags vient de ha-waterkotte ; Waterkotte n'en publie pas.
+
+## Remerciements
+
+Construit sur le travail de Matthias Marquardt et des contributeurs de
+[ha-waterkotte](https://github.com/marq24/ha-waterkotte) (MIT).

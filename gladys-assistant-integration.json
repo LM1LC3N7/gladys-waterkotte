@@ -1,177 +1,210 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Waterkotte",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Waterkotte EcoTouch heat pumps on the local network: temperatures, state, optional commands.",
+    "fr": "PAC Waterkotte EcoTouch en local : températures, état, commandes en option."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-waterkotte:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-waterkotte/main/cover.png",
+  "categories": ["climate"],
+  "transports": ["local"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your heat pump",
+        "fr": "Votre pompe à chaleur"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Shows your Waterkotte heat pump (EcoTouch controller, or the older EasyCon) in Gladys through its local web interface, without any cloud: temperatures, compressor, hot water, alarm, and optionally the operation of heating and hot water and the hot water setpoint. Enter the IP address of the heat pump (give it a fixed address in your router) and the password of its web page, save, then add it from the Discovery tab. The controller accepts few sessions at once: Gladys keeps one open. The web page is plain HTTP: keep the heat pump on a trusted network. Never tested with a real heat pump. Not affiliated with Waterkotte.",
+        "fr": "Affiche votre pompe à chaleur Waterkotte (régulation EcoTouch, ou l'ancienne EasyCon) dans Gladys par son interface web locale, sans cloud : températures, compresseur, eau chaude, alarme, et en option le fonctionnement du chauffage et de l'eau chaude et la consigne d'eau chaude. Saisissez l'adresse IP de la pompe à chaleur (donnez-lui une adresse fixe dans votre routeur) et le mot de passe de sa page web, enregistrez, puis ajoutez-la depuis l'onglet Découverte. La régulation accepte peu de sessions à la fois : Gladys en garde une ouverte. La page web est en HTTP simple : gardez la pompe à chaleur sur un réseau de confiance. Jamais testé avec une vraie pompe à chaleur. Sans lien avec Waterkotte."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-waterkotte/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-waterkotte/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "address",
+      "type": "string",
+      "label": {
+        "en": "IP address of the heat pump",
+        "fr": "Adresse IP de la pompe à chaleur"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
+      "description": {
+        "en": "The address of its web page: an IPv4 address or a host name (port 80 unless you add one, for example 192.168.1.50:8080).",
+        "fr": "L'adresse de sa page web : une adresse IPv4 ou un nom d'hôte (port 80 sauf si vous en ajoutez un, par exemple 192.168.1.50:8080)."
+      },
+      "placeholder": {
+        "en": "192.168.1.50",
+        "fr": "192.168.1.50"
+      },
       "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "default": ""
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
-      },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
-    },
-    {
-      "key": "unit",
+      "key": "system",
       "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "label": {
+        "en": "Controller",
+        "fr": "Régulation"
+      },
+      "description": {
+        "en": "EcoTouch when the web page asks for a password (even when it shows \"EasyCon\"); EasyCon for the older controllers without a login page (read only here).",
+        "fr": "EcoTouch si la page web demande un mot de passe (même si elle affiche « EasyCon ») ; EasyCon pour les anciennes régulations sans page de connexion (lecture seule ici)."
+      },
       "required": false,
-      "default": "celsius",
+      "default": "ecotouch",
       "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
+        {
+          "value": "ecotouch",
+          "label": {
+            "en": "EcoTouch",
+            "fr": "EcoTouch"
+          }
+        },
+        {
+          "value": "easycon",
+          "label": {
+            "en": "EasyCon (older)",
+            "fr": "EasyCon (ancienne)"
+          }
+        }
       ]
     },
     {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "username",
+      "type": "string",
+      "label": {
+        "en": "User name",
+        "fr": "Nom d'utilisateur"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "The user of the web page: waterkotte unless your installer changed it.",
+        "fr": "L'utilisateur de la page web : waterkotte sauf si votre installateur l'a changé."
       },
       "required": false,
-      "default": 300,
-      "min": 60,
-      "max": 3600
+      "default": "waterkotte"
+    },
+    {
+      "key": "password",
+      "type": "secret",
+      "label": {
+        "en": "Password",
+        "fr": "Mot de passe"
+      },
+      "description": {
+        "en": "The password of the web page of the heat pump. Kept by Gladys in its database, never shown again, sent only to the heat pump.",
+        "fr": "Le mot de passe de la page web de la pompe à chaleur. Gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à la pompe à chaleur."
+      },
+      "required": false
+    },
+    {
+      "key": "allow_commands",
+      "type": "boolean",
+      "label": {
+        "en": "Allow the commands",
+        "fr": "Autoriser les commandes"
+      },
+      "description": {
+        "en": "Off by default. On: Gladys may set heating and hot water to Auto or Manual and change the hot water setpoint, up to the ceiling below. Off: those are refused. Turning heating or hot water Off does not depend on this option.",
+        "fr": "Désactivé par défaut. Activé : Gladys peut mettre le chauffage et l'eau chaude en Auto ou en Manuel et changer la consigne d'eau chaude, jusqu'au plafond ci-dessous. Désactivé : ces commandes sont refusées. Mettre le chauffage ou l'eau chaude à l'Arrêt ne dépend pas de cette option."
+      },
+      "required": false,
+      "default": false
+    },
+    {
+      "key": "dhw_max_temperature",
+      "type": "number",
+      "label": {
+        "en": "Hot water ceiling (°C)",
+        "fr": "Plafond de l'eau chaude (°C)"
+      },
+      "description": {
+        "en": "Scalding risk: Gladys never sets the hot water above this temperature. 55 °C by default, from 40 to 60 °C (never more than 60 °C, whatever is typed).",
+        "fr": "Risque de brûlure : Gladys ne règle jamais l'eau chaude au-dessus de cette température. 55 °C par défaut, de 40 à 60 °C (jamais plus de 60 °C, quoi qu'on saisisse)."
+      },
+      "required": false,
+      "default": 55,
+      "min": 40,
+      "max": 60
+    },
+    {
+      "key": "poll_interval",
+      "type": "number",
+      "label": {
+        "en": "Refresh interval (s)",
+        "fr": "Intervalle de rafraîchissement (s)"
+      },
+      "description": {
+        "en": "How often the heat pump is read, in seconds.",
+        "fr": "Fréquence de lecture de la pompe à chaleur, en secondes."
+      },
+      "required": false,
+      "default": 60,
+      "min": 30,
+      "max": 600
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
+      "description": {
+        "en": "Used for the names of the device and features added from now on, for the options and for the command errors.",
+        "fr": "Sert aux noms de l'appareil et des fonctionnalités ajoutés désormais, aux options et aux erreurs des commandes."
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
+      "key": "test_connection",
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
+      "description": {
+        "en": "Reads the heat pump now (never sooner than the interval), or tries the credentials once after a refusal.",
+        "fr": "Lit la pompe à chaleur maintenant (jamais plus tôt que l'intervalle), ou essaie une fois les identifiants après un refus."
+      },
       "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
-    }
-  ],
-  "scene_triggers": [
-    {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
-      },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
-      "variables": [
-        {
-          "key": "target",
-          "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
-        }
-      ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }

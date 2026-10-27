@@ -32,17 +32,31 @@ pushing.
 
 ```
 index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
+src/handlers.js                   the SDK handlers (shared with the end-to-end tests)
+src/app.js                        polling, publishing, stops (Off) and sensitive commands, /data
+src/client.js                     one heat pump: the gate (one request at a time) and the session
+src/http.js                       a bounded HTTP/1.1 GET client over node:net (beforeSend, sent)
+src/protocol.js                   EcoTouch / EasyCon requests and answers (pure)
+src/devices.js                    the Gladys device, its features and states (pure)
 src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+src/store.js                      /data (stops, refusal fingerprint, pause, last attempt)
+src/i18n.js                       runtime texts, English and French
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, against the SDK's fake Gladys and a fake pump
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
+
+## Rules of this integration
+
+- **Off is a stop**: never subject to the `allow_commands` option, the bounds,
+  a pause, the identity check nor a read in progress (TODO.md "Decisions").
+  Auto, Manual and the hot water setpoint are refused unless the option is
+  on; the hot water setpoint is never written above 60 °C (55 °C by default).
+- **No switch, no writable binary.** One session with the controller, never
+  a loop of logins. The password and the session cookie are never logged,
+  shown nor written to /data.
+- Read `~/code/integrations/_lots/fiche.md` before changing the commands.
 
 ## Rules
 
