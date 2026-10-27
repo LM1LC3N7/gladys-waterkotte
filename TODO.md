@@ -13,6 +13,12 @@ up to date at the end of every milestone.
       ceiling 55 °C (40–60, never above 60); pause on "too many users",
       refused credentials kept; docs en/fr, cover. Tested against a fake
       controller only.
+- [x] **Review r4** (2026-10-27): APPROUVÉ, no blocker (4th round, rule of 5).
+- [ ] **Next patch — review r4 leftovers**: an Off not sent because the
+      controller is busy says "pas de réponse à temps"; stops held before a
+      switch to EasyCon stay until their deadline without being able to leave
+      (harmless); a firmware that never accepts the session gives 31 logins an
+      hour (check at milestone 2).
 - [ ] **Milestone 2 — real heat pump**: run against a real EcoTouch (see
       "To check"), turn the answers (no address, no cookie) into fixtures.
 - [ ] **Milestone 3 — more**: heating curve and heating adjust (I263),
