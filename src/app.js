@@ -155,7 +155,7 @@ export class WaterkotteApp {
     const wall = this.now();
     const mono = this.monotonic();
     /**
-     * role -> { seq, atMono, deadlineMono, written, sends, from, rounds }: seq 0
+     * role -> { seq, atMono, deadlineMono, written, sends, from }: seq 0
      * comes from /data (older than any click); `from` is the value of a read
      * that started after the stop arrived; `sends` the writes again that left.
      */
@@ -178,7 +178,6 @@ export class WaterkotteApp {
           written: s.written === true,
           sends: s.sends,
           from: s.from ?? undefined,
-          rounds: 0,
         });
       }
     }
@@ -291,13 +290,33 @@ export class WaterkotteApp {
     await this.publishAll();
   }
 
+  /**
+   * (Re)starts on a configuration. While the previous client logs out, no
+   * client is current: an Off arriving then waits for the new one (or is
+   * written by its first stop round), never sent on the old one.
+   */
   async start(raw = {}) {
+    const run = this.restart(raw);
+    this.starting = run;
+    try {
+      await run;
+    } finally {
+      if (this.starting === run) {
+        this.starting = undefined;
+      }
+    }
+  }
+
+  async restart(raw) {
     const previous = this.client;
+    this.client = undefined;
+    this.closing = previous;
     this.halt();
     if (previous) {
       await previous.logout();
       previous.close();
     }
+    this.closing = undefined;
     this.config = normalizeConfig(raw);
     this.values = undefined;
     this.serial = undefined;
@@ -337,6 +356,9 @@ export class WaterkotteApp {
     // A stop kept in /data goes first, before the first poll.
     if (this.stops.size > 0 && !this.refusal) {
       await this.stopRound();
+      if (this.stopsNeedRound(this.monotonic())) {
+        this.scheduleStops(TIMINGS.stopRound);
+      }
     }
     this.schedule();
   }
@@ -345,6 +367,10 @@ export class WaterkotteApp {
   halt() {
     this.generation += 1;
     this.clearTimer();
+    if (this.stopTimer) {
+      this.timers.clearTimeout(this.stopTimer);
+      this.stopTimer = undefined;
+    }
     for (const handle of this.followUps) {
       this.timers.clearTimeout(handle);
     }
@@ -431,10 +457,6 @@ export class WaterkotteApp {
     }
     const mono = this.monotonic();
     let wait = this.dueAt(mono) - mono;
-    if (this.pauseLeft(mono) > 0 && this.pauseStops().length > 0) {
-      // Stops do not wait for the end of a pause (within their own tries).
-      wait = Math.min(wait, this.interval);
-    }
     for (const stop of this.stops.values()) {
       // Woken at the deadline of a stop: it is dropped then, whatever the reads.
       wait = Math.min(wait, stop.deadlineMono - mono);
@@ -473,13 +495,7 @@ export class WaterkotteApp {
       await this.persist();
     }
     if (this.pauseLeft(mono) > 0) {
-      const stops = this.pauseStops();
-      if (stops.length > 0) {
-        for (const stop of stops) {
-          stop.rounds += 1;
-        }
-        await this.stopRound();
-      }
+      // The stops have their own rounds during a pause (scheduleStops).
       if (generation === this.generation) {
         await this.publishAll();
         this.schedule();
@@ -610,6 +626,9 @@ export class WaterkotteApp {
     this.error = kind;
     this.logger.warn(`Heat pump: ${kind}; pause of ${Math.round(length / 1000)} s`);
     await this.persist();
+    if (this.stops.size > 0 && !this.stopTimer) {
+      this.scheduleStops(TIMINGS.stopRound);
+    }
   }
 
   // --- Stops (protective) ------------------------------------------------------------
@@ -627,11 +646,56 @@ export class WaterkotteApp {
     return changed;
   }
 
-  /** The stops a round during a pause may still try (as many rounds as writes again allowed). */
-  pauseStops() {
-    return [...this.stops.values()].filter(
-      (stop) => stop.rounds < TIMINGS.stopResends && this.monotonic() < stop.deadlineMono,
+  /**
+   * The rounds of the stops between the polls: 10 s after an Off that could
+   * not be written, then every minute while one is not written yet or while
+   * a pause holds the polls, until their deadline (15 logins at most per
+   * stop, as a poll every minute). Stops never wait for the end of a pause.
+   */
+  scheduleStops(delay = TIMINGS.stopRound) {
+    if (this.stopTimer) {
+      this.timers.clearTimeout(this.stopTimer);
+      this.stopTimer = undefined;
+    }
+    if (
+      !this.client ||
+      this.refusal ||
+      this.stops.size === 0 ||
+      this.config.system !== SYSTEMS.ECOTOUCH
+    ) {
+      return;
+    }
+    const generation = this.generation;
+    this.stopTimer = this.timers.setTimeout(
+      () => {
+        this.stopTimer = undefined;
+        if (generation === this.generation) {
+          this.stopRoundDue().catch((err) => this.logger.warn(`Stop round failed: ${err.message}`));
+        }
+      },
+      Math.max(0, delay),
     );
+  }
+
+  /** Whether the stops need their own round: one not written yet, or a pause. */
+  stopsNeedRound(mono) {
+    return (
+      this.stops.size > 0 &&
+      (this.pauseLeft(mono) > 0 || [...this.stops.values()].some((stop) => !stop.written))
+    );
+  }
+
+  async stopRoundDue() {
+    const generation = this.generation;
+    if (this.purgeStops(this.monotonic())) {
+      await this.persist();
+    }
+    if (this.stopsNeedRound(this.monotonic())) {
+      await this.stopRound();
+    }
+    if (generation === this.generation && this.stopsNeedRound(this.monotonic())) {
+      this.scheduleStops(TIMINGS.stopRound);
+    }
   }
 
   /**
@@ -644,7 +708,7 @@ export class WaterkotteApp {
    * read. The others are written together; a write again counts only when
    * it left, 3 at most.
    */
-  async resendStops(hold, read, allowLogin, readSeq) {
+  async resendStops(hold, read, allowLogin, readSeq, justWritten = new Set()) {
     const mono = this.monotonic();
     const entries = [];
     let changed = this.purgeStops(mono);
@@ -665,7 +729,10 @@ export class WaterkotteApp {
         changed = true;
       } else if (code !== undefined && code !== stop.from) {
         const mine = this.lastWrites.get(role);
-        if (stop.written && !(mine && mine.seq < stop.seq && mine.code === code)) {
+        // An older command of Gladys, sent within the guard time (90 s), explains the change.
+        const ours =
+          mine && mine.seq < stop.seq && mine.code === code && mono - mine.at < TIMINGS.guard;
+        if (stop.written && !ours) {
           this.logger.warn(`Stop ${role}: set to ${code} by someone else since, not written again`);
           this.stops.delete(role);
           changed = true;
@@ -680,6 +747,10 @@ export class WaterkotteApp {
         );
         this.stops.delete(role);
         changed = true;
+        continue;
+      }
+      if (justWritten.has(role)) {
+        // Written by this round just before the read: judged by the next one.
         continue;
       }
       // An unknown value: in doubt, the stop goes.
@@ -727,9 +798,43 @@ export class WaterkotteApp {
     try {
       await client.hold(PRIORITY.STOP, async (hold) => {
         const allowLogin = once();
+        // The stops never written go first, without waiting for a read (in
+        // doubt, a stop goes); then a read judges the others and gives theirs.
+        const fresh = [...this.stops].filter(([, stop]) => !stop.written).map(([role]) => role);
+        const justWritten = new Set();
+        if (fresh.length > 0) {
+          try {
+            await client.write(
+              hold,
+              fresh.map((role) => [
+                COMMANDS[role].tag,
+                encodeEcotouch(COMMANDS[role].tag, OPERATION_CODES.off),
+              ]),
+              { allowLogin, keep: true },
+            );
+            fresh.forEach((role) => justWritten.add(role));
+          } catch (err) {
+            if (err.sent) {
+              fresh.forEach((role) => justWritten.add(role));
+            }
+            if (!err.sent && err.inLogin) {
+              throw err;
+            }
+          } finally {
+            for (const role of justWritten) {
+              const stop = this.stops.get(role);
+              if (stop) {
+                stop.written = true;
+              }
+            }
+            if (justWritten.size > 0) {
+              await this.persist();
+            }
+          }
+        }
         const readSeq = this.seq;
         const read = await client.read(hold, MODE_TAGS, { allowLogin, keep: true });
-        await this.resendStops(hold, read, allowLogin, readSeq);
+        await this.resendStops(hold, read, allowLogin, readSeq, justWritten);
       });
     } catch (err) {
       if (err.reason === REASONS.BAD_PASSWORD) {
@@ -753,9 +858,28 @@ export class WaterkotteApp {
       sends: 0,
       // Only a read that left after this click tells the value to compare with.
       from: undefined,
-      rounds: 0,
     };
     this.stops.set(role, stop);
+    if (!this.client && this.starting) {
+      // A new configuration is starting: wait for its client (its first stop round writes this stop).
+      // The old client gives its gate back at once: a poll in flight yields, a frozen read is cut.
+      this.closing?.hold(PRIORITY.STOP, async () => {}).catch(() => {});
+      await this.persist();
+      await this.waitFor(this.starting, received + TIMINGS.commandSendBy - TIMINGS.commandMinSend);
+      if (this.stops.get(role) !== stop) {
+        // Written and read back Off by the first round of the new client.
+        return;
+      }
+      if (
+        !this.client ||
+        this.monotonic() >= received + TIMINGS.commandSendBy - TIMINGS.commandMinSend
+      ) {
+        this.scheduleStops(stop.written ? TIMINGS.stopRound : TIMINGS.stopQuick);
+        throw this.refusalError(
+          stop.written ? ERRORS.stop.unconfirmed('late') : ERRORS.stop.notSent('late'),
+        );
+      }
+    }
     const client = this.client;
     if (!client) {
       await this.persist();
@@ -792,8 +916,11 @@ export class WaterkotteApp {
       this.logger.warn(`Stop ${role}: ${reason} (${stop.written ? 'sent' : 'not sent'})`);
       if (stop.written) {
         this.followUp();
+        this.scheduleStops(TIMINGS.stopRound);
         throw this.refusalError(ERRORS.stop.unconfirmed(reason));
       }
+      // Not written: a round in 10 s, not the next poll.
+      this.scheduleStops(TIMINGS.stopQuick);
       throw this.refusalError(
         reason === REASONS.BAD_PASSWORD ? ERRORS.stop.refused : ERRORS.stop.notSent(reason),
       );
@@ -812,6 +939,7 @@ export class WaterkotteApp {
     }
     await this.persist();
     this.followUp();
+    this.scheduleStops(TIMINGS.stopRound);
     throw this.refusalError(
       outcome.readError ? ERRORS.stop.unconfirmed(outcome.readError) : ERRORS.stop.notYetApplied,
     );
@@ -861,6 +989,23 @@ export class WaterkotteApp {
   }
 
   // --- Sensitive commands -----------------------------------------------------------
+
+  /** Waits for `promise`, or until the monotonic time `until` (whichever first). */
+  waitFor(promise, until) {
+    return new Promise((resolve) => {
+      const handle = this.timers.setTimeout(resolve, Math.max(0, until - this.monotonic()));
+      promise.then(
+        () => {
+          this.timers.clearTimeout(handle);
+          resolve();
+        },
+        () => {
+          this.timers.clearTimeout(handle);
+          resolve();
+        },
+      );
+    });
+  }
 
   refusalError(text) {
     return new Error(word(text, this.config.language));
@@ -1080,7 +1225,7 @@ export class WaterkotteApp {
           this.checkCommand(generation, client, role, seq, wanted);
           if (MODE_ROLES.includes(role)) {
             // An older command of Gladys: a stop arriving later is not "contradicted" by it.
-            this.lastWrites.set(role, { seq, code: wanted.expected });
+            this.lastWrites.set(role, { seq, code: wanted.expected, at: this.monotonic() });
           }
         },
         allowLogin,

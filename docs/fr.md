@@ -65,8 +65,9 @@ d'une lecture en cours. Il est écrit, puis relu :
   15 minutes après le clic quelles que soient les lectures. Une fois écrit,
   il n'est pas réécrit par-dessus une valeur réglée après le clic par
   quelqu'un d'autre (sur la régulation, sa page web) ; une commande plus
-  ancienne de Gladys ne compte pas. Pendant une pause, l'arrêt a encore
-  3 essais au plus.
+  ancienne de Gladys ne compte pas. Un arrêt pas encore écrit est réessayé
+  10 secondes plus tard, puis chaque minute ; pendant une pause aussi,
+  jusqu'à ses 15 minutes (une connexion par minute au plus).
 
 L'Arrêt est refusé, rien n'est envoyé, dans ces cas seulement :
 

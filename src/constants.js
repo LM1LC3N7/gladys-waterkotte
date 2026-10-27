@@ -158,6 +158,9 @@ export const TIMINGS = {
   followUps: [5 * SECOND, 20 * SECOND],
   /** A sent command keeps its guard until a read shows what it asked, or 90 s. */
   guard: 90 * SECOND,
+  /** Rounds of the stops between polls: 10 s after an Off not written, then every minute. */
+  stopQuick: 10 * SECOND,
+  stopRound: MINUTE,
   /** A stop not confirmed is written again by the next reads, 3 times at most, for 15 minutes. */
   stopResends: 3,
   stopKeep: 15 * MINUTE,

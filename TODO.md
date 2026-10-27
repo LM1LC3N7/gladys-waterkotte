@@ -95,7 +95,17 @@ up to date at the end of every milestone.
   read after the click (`from`), unless an older command of Gladys wrote it.
   A stop never written is never dropped by a read; a read that started
   before the stop arrived does not judge it; a poll cut by the stop does not
-  write it. During a pause, 3 rounds at most per stop. A /data date in the
+  write it. Rounds of the stops between polls (`scheduleStops`): 10 s after
+  an Off not written, then every minute while one is not written or a pause
+  holds the polls, until the deadline (15 logins at most per stop); a round
+  writes the stops never written first, then reads and judges the others.
+  A stop never written is never dropped before its deadline, even when two
+  reads after the click show a change (reviewer's m1 r2, overruled by the
+  coordinator's rule). `lastWrites` (older Gladys command) counts 90 s.
+  Saving the configuration during an Off: no client is current while the
+  old one logs out; the Off waits for the new one (its first round writes
+  it), the old client gives its gate back at once and a closed client sends
+  nothing. A /data date in the
   future is invalid. A login that did not leave gives its turn back; a login
   error is never "sent" nor counted as a write. At start, the kept stops go
   before the first poll (a read of I30/I32 then the writes). Refused only:

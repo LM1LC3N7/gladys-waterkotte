@@ -61,8 +61,9 @@ back:
   next reads: written again 3 times at most, and dropped 15 minutes after the
   click whatever the reads. Once written, it is not written again over a
   value someone else set after the click (on the controller, its web page);
-  an older command of Gladys does not count. During a pause, the stop still
-  gets 3 tries at most.
+  an older command of Gladys does not count. A stop not written yet is tried
+  again 10 seconds later, then every minute; during a pause too, until its
+  15 minutes (one login a minute at most).
 
 Off is refused, nothing sent, in these cases only:
 

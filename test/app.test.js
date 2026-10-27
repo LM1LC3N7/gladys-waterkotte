@@ -275,7 +275,14 @@ test('a stop kept in /data goes at start, before the first poll; an outdated one
   const now = clock.now();
   const store = createMemoryStore({
     stops: [
-      { role: 'dhw-mode', from: 1, at: now - MINUTE, deadline: now + 10 * MINUTE, sends: 1 },
+      {
+        role: 'dhw-mode',
+        from: 1,
+        at: now - MINUTE,
+        deadline: now + 10 * MINUTE,
+        written: true,
+        sends: 1,
+      },
       { role: 'heating-mode', at: now - 20 * MINUTE, deadline: now - MINUTE, sends: 0 },
     ],
   });
@@ -416,6 +423,108 @@ test('a stop arriving during a round of kept stops is not judged on the round re
   assert.equal(dhwWrites, 1);
 });
 
+test('a controller busy for 10 min during a pause: the Off is written before its deadline', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock, maxSessions: 2 });
+  const { gladys, device, advance, app } = await setup(t, { pump, clock });
+  pump.expire();
+  pump.sessions.add('browser');
+  pump.sessions.add('app');
+  app.lastReadAt = undefined;
+  await app.tick();
+  assert.ok(app.pauseLeft(clock.monotonic()) > 0);
+  const d = device();
+  const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+  const off = gladys.fake.setValue(d, target, 'off');
+  await advance(4000);
+  assert.match((await off).error, /Arrêt non envoyé/);
+  clock.timers.setTimeout(() => pump.sessions.clear(), 10 * MINUTE);
+  await advance(14 * MINUTE, 5 * SECOND);
+  assert.deepEqual(writes(pump), ['I30=0']);
+  assert.equal(pump.tags.I30, '0');
+  assert.ok(pump.count(/login/) <= 20);
+});
+
+test('an Off not sent is tried again within 10 to 20 s, not at the next poll', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  const { command, advance, gladys } = await setup(t, { pump, clock });
+  await gladys.fake.configUpdated({ ...CONFIG, poll_interval: 600 });
+  await advance(SECOND);
+  pump.refuse = true;
+  const ack = await command('heating-mode', 'off', { wait: 3500 });
+  assert.match(ack.error, /Arrêt non envoyé/);
+  pump.refuse = false;
+  await advance(15 * SECOND);
+  assert.deepEqual(writes(pump), ['I30=0']);
+});
+
+test('the configuration saved during a slow logout: the Off goes on the new client only, one connection at a time', async (t) => {
+  const clock = testClock();
+  const pump = fakePump({ clock });
+  let open = 0;
+  let peak = 0;
+  const connect = pump.connect;
+  pump.connect = () => {
+    const s = connect();
+    open += 1;
+    peak = Math.max(peak, open);
+    const destroy = s.destroy;
+    let closed = false;
+    s.destroy = () => {
+      if (!closed) {
+        closed = true;
+        open -= 1;
+      }
+      destroy();
+    };
+    return s;
+  };
+  const { gladys, device, advance } = await setup(t, { pump, clock });
+  peak = 0;
+  pump.latency = (path) => (path.startsWith('/cgi/logout') ? 900 : 0);
+  const d = device();
+  const target = d.features.find((f) => f.external_id === feature('heating-mode'));
+  const saved = gladys.fake.configUpdated({ ...CONFIG, poll_interval: 45 });
+  await advance(100, 50);
+  const off = gladys.fake.setValue(d, target, 'off');
+  await advance(4000, 50);
+  await saved;
+  assert.deepEqual(await off, { success: true });
+  assert.equal(pump.tags.I30, '0');
+  assert.equal(peak, 1);
+  assert.equal(pump.sessions.size, 1);
+});
+
+test('a kept stop: the write meets "#E_NEED_LOGIN" then the login "too many users": not counted, written later', async (t) => {
+  const clock = testClock();
+  const store = createMemoryStore();
+  const pump = fakePump({ clock, maxSessions: 3 });
+  const { command, advance } = await setup(t, { pump, clock, store });
+  pump.applyDelay = Infinity;
+  await command('heating-mode', 'off', { wait: 3000 });
+  assert.equal(store.data.stops[0].sends, 0);
+  let armed = 1;
+  const handle = pump.handle;
+  pump.handle = (path, headers) => {
+    if (armed > 0 && path.startsWith('/cgi/writeTags')) {
+      armed -= 1;
+      pump.sessions.clear();
+      pump.sessions.add('a');
+      pump.sessions.add('b');
+      pump.sessions.add('c');
+      return { status: 200, body: '#E_NEED_LOGIN\n' };
+    }
+    return handle(path, headers);
+  };
+  await advance(18 * SECOND);
+  assert.equal(store.data.stops[0].sends, 0, 'a write that met a refused login is not counted');
+  pump.sessions.clear();
+  pump.applyDelay = 0;
+  await advance(2 * MINUTE, SECOND);
+  assert.equal(pump.tags.I30, '0');
+});
+
 test('Off without a session and the network down for 0.5 s: logs in and writes within its budget', async (t) => {
   const clock = testClock();
   const pump = fakePump({ clock });
@@ -455,8 +564,8 @@ test('a stop is dropped at its deadline even when every read fails, and the paus
   await command('heating-mode', 'off', { wait: 3500 });
   await advance(16 * MINUTE, 5 * SECOND);
   assert.deepEqual(store.data.stops, []);
-  // The pause reads (1, 3, 7, 15 min) and 3 rounds for the stop at most.
-  assert.ok(pump.count(/login/) <= 10, String(pump.count(/login/)));
+  // A stop round a minute at most (15), the pause reads (1, 3, 7, 15 min), the first ones.
+  assert.ok(pump.count(/login/) <= 22, String(pump.count(/login/)));
   const logins = pump.count(/login/);
   await advance(60 * MINUTE, 10 * SECOND);
   // Only the reads of the doubled pause (2, 4, 8, 16, 32 min...): a handful, not one a minute.

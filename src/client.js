@@ -191,7 +191,8 @@ export class WaterkotteClient {
 
   /** One HTTP request inside a hold. */
   async request(hold, path, { startBy, answerBy, beforeSend, write = false, auth, keep } = {}) {
-    if (this.current !== hold) {
+    // A closed client sends nothing more, not even a login.
+    if (this.closed || this.current !== hold) {
       throw new HttpError(ERROR_KINDS.ABORTED);
     }
     if (hold.preempted && !keep) {
