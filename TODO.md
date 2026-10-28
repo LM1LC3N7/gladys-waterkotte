@@ -10,7 +10,7 @@ up to date at the end of every milestone.
       device, temperatures, compressor, hot water, alarm, power, COP; Off of
       heating and hot water (stop, always sent, kept in /data); Auto, Manual
       and the hot water setpoint behind `allow_commands` (off), hot water
-      ceiling 55 °C (40–60, never above 60); pause on "too many users",
+      ceiling 65 °C (40–65, never above 65); pause on "too many users",
       refused credentials kept; docs en/fr, cover. Tested against a fake
       controller only.
 - [x] **Review r4** (2026-10-27): APPROUVÉ, no blocker (4th round, rule of 5).
@@ -90,7 +90,7 @@ up to date at the end of every milestone.
   compressor and alarm `unknown/binary` read only; hot water heating
   `water-heater/heating`; heating and hot water `text/select` (off, auto,
   manual: string labels); hot water setpoint
-  `water-heater/target-temperature` 28–60 °C. On EasyCon the three commands
+  `water-heater/target-temperature` 28–65 °C. On EasyCon the three commands
   are read only. A feature appears once its tag gave a value in range; the
   created device's features are kept (no lost feature).
 - **Off = stop** (lot 16 lesson 1): independent of the option, the bounds,
@@ -140,7 +140,7 @@ up to date at the end of every milestone.
   held (a login in flight is ended too).
 - **Sensitive commands**: option checked on arrival and in `beforeSend`;
   values strict (`'' `, `null`, `'1e2'`, fractions refused); setpoint
-  28 °C to the ceiling (55 by default, 40–60, rounded down, never above 60)
+  28 °C to the ceiling (65 by default, 40–65, rounded down, never above 65)
   checked again in `beforeSend`; refused while a hot water stop is kept;
   one command per target at a time; fresh read of the target and the serial
   (decided on it, never on memory); /data saved before the first byte

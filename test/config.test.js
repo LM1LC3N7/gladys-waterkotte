@@ -48,12 +48,14 @@ test('credentials: a password without a user is refused; control characters refu
   });
 });
 
-test('options: strict true, ceiling 40-60 rounded down, interval bounded', () => {
+test('options: strict true, ceiling 40-65 rounded down, interval bounded', () => {
   assert.equal(normalizeConfig({ allow_commands: 'yes' }).allowCommands, false);
   assert.equal(normalizeConfig({ allow_commands: true }).allowCommands, true);
-  assert.equal(dhwCapOf(''), 55);
-  assert.equal(dhwCapOf(null), 55);
-  assert.equal(dhwCapOf(80), 60);
+  assert.equal(dhwCapOf(''), 65);
+  assert.equal(dhwCapOf(null), 65);
+  assert.equal(dhwCapOf(80), 65);
+  assert.equal(dhwCapOf(65), 65);
+  assert.equal(dhwCapOf(65.5), 65);
   assert.equal(dhwCapOf(59.9), 59);
   assert.equal(dhwCapOf(10), 40);
   assert.equal(normalizeConfig({ poll_interval: 5 }).pollInterval, 30);

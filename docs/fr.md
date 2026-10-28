@@ -89,7 +89,7 @@ vous n'activez pas **Autoriser les commandes** (désactivé par défaut).
 Ensuite :
 
 - la consigne d'eau chaude prend des degrés entiers de 28 °C au plafond de la
-  configuration, **55 °C par défaut**, de 40 à 60 °C (jamais plus de 60 °C,
+  configuration, **65 °C par défaut**, de 40 à 65 °C (jamais plus de 65 °C,
   quoi qu'on saisisse) : risque de brûlure ;
 - chaque commande lit la valeur et le numéro de série de la pompe à chaleur
   juste avant d'écrire, et ne réussit que si une relecture montre la valeur

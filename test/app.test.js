@@ -89,7 +89,7 @@ test('the device: features read, no switch nor writable binary, options are stri
     }
   }
   const setpoint = d.features.find((f) => f.external_id === feature('dhw-setpoint'));
-  assert.equal(setpoint.max, 60);
+  assert.equal(setpoint.max, 65);
 });
 
 test('states: temperatures, modes as their key, compressor and hot water bits', async (t) => {
@@ -924,13 +924,13 @@ test('Auto, Manual and the setpoint are refused unless allowed, nothing sent', a
   assert.equal(pump.writes().length, 0);
 });
 
-test('the hot water setpoint: whole degrees, 28 to the ceiling (55 by default), never above 60', async (t) => {
+test('the hot water setpoint: whole degrees, 28 to the ceiling (65 by default), never above 65', async (t) => {
   const { command, pump, gladys } = await setup(t, { config: ALLOWED });
   for (const [value, error] of [
-    [61, /Entre 28 et 60/],
-    [70, /Entre 28 et 60/],
-    [56, /plafond d'eau chaude de 55/],
-    [27, /Entre 28 et 60/],
+    [66, /Entre 28 et 65/],
+    [70, /Entre 28 et 65/],
+    [65.5, /Entre 28 et 65|Degrés entiers/],
+    [27, /Entre 28 et 65/],
     [50.5, /Degrés entiers/],
     ['', /pas un nombre/],
     [null, /pas un nombre/],
@@ -940,12 +940,15 @@ test('the hot water setpoint: whole degrees, 28 to the ceiling (55 by default), 
     assert.match(ack.error, error, String(value));
   }
   assert.equal(pump.writes().length, 0);
+  assert.deepEqual(await command('dhw-setpoint', 65), { success: true });
+  assert.deepEqual(writes(pump), ['A38=650']);
+  await gladys.fake.configUpdated({ ...ALLOWED, dhw_max_temperature: 55 });
+  assert.match((await command('dhw-setpoint', 56)).error, /plafond d'eau chaude de 55/);
   assert.deepEqual(await command('dhw-setpoint', 55), { success: true });
-  assert.deepEqual(writes(pump), ['A38=550']);
   await gladys.fake.configUpdated({ ...ALLOWED, dhw_max_temperature: 75 });
-  assert.match((await command('dhw-setpoint', 61)).error, /Entre 28 et 60/);
-  assert.deepEqual(await command('dhw-setpoint', 60), { success: true });
-  assert.ok(pump.writes().every((r) => Number(r.query.v1) <= 600));
+  assert.match((await command('dhw-setpoint', 66)).error, /Entre 28 et 65/);
+  assert.match((await command('dhw-setpoint', 65.5)).error, /Entre 28 et 65|Degrés entiers/);
+  assert.ok(pump.writes().every((r) => Number(r.query.v1) <= 650));
 });
 
 test('a value already in place: nothing written', async (t) => {

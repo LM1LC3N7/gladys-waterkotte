@@ -52,7 +52,7 @@ test/                             node --test, against the SDK's fake Gladys and
 - **Off is a stop**: never subject to the `allow_commands` option, the bounds,
   a pause, the identity check nor a read in progress (TODO.md "Decisions").
   Auto, Manual and the hot water setpoint are refused unless the option is
-  on; the hot water setpoint is never written above 60 °C (55 °C by default).
+  on; the hot water setpoint is never written above 65 °C (65 °C by default).
 - **No switch, no writable binary.** One session with the controller, never
   a loop of logins. The password and the session cookie are never logged,
   shown nor written to /data.

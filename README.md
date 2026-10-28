@@ -4,7 +4,7 @@ Gladys Assistant external integration for **Waterkotte heat pumps** through
 the local web interface of their controller (EcoTouch; EasyCon read only):
 temperatures, compressor, hot water, alarm, power, COP, and optionally the
 operation of heating and hot water and the hot water setpoint (capped at
-55 °C by default, 60 °C at most). "Off" is a stop that does not depend on
+65 °C by default, 65 °C at most). "Off" is a stop that does not depend on
 the commands option.
 
 Unofficial, not affiliated with Waterkotte. It was **never tested with a real heat pump**: built from [ha-waterkotte](https://github.com/marq24/ha-waterkotte)

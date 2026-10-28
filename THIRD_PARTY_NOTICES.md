@@ -41,7 +41,7 @@ answers, the EasyCon XML request (`/config/xml.cgi`), the tag numbers and
 their scale (analog tags in tenths), the meaning of the operation tags
 (I30, I32: 0 off, 1 auto, 2 manual) and of the status bits (I51), the serial
 number tags (I114, I115) and the range of the hot water setpoint (28 to
-70 °C, capped here at 60 °C). Changed: one session kept and logged in again
+70 °C, capped here at 65 °C). Changed: one session kept and logged in again
 at most once per poll or command (never in a loop), "too many users" as a
 pause, a refused password kept and never sent again by itself, a read back
 before any success, bounded answers, and EasyCon read only.

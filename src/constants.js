@@ -100,14 +100,14 @@ export const POLL_INTERVAL = {
 /**
  * The hot water setpoint the commands may set, in °C. The low end is the
  * one ha-waterkotte offers (28 °C); the configuration chooses the ceiling
- * between `min` and `max`, 55 °C by default; nothing above 60 °C is ever
+ * between `min` and `max`, 65 °C by default; nothing above 65 °C is ever
  * written, whatever the configuration or the controller would accept (70 °C).
  */
 export const DHW_SETPOINT = { min: 28 };
 export const DHW_CAP = {
   min: 40,
-  max: 60,
-  default: 55,
+  max: 65,
+  default: 65,
 };
 
 export const LIMITS = {

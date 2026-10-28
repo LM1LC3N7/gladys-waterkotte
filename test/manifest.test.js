@@ -64,7 +64,7 @@ test('the store basics', () => {
       /trusted\s+network|réseau\s+de\s+confiance/i,
       'say the web page is plain HTTP',
     );
-    assert.match(docs, /55\s*°C/, 'document the hot water ceiling');
+    assert.match(docs, /65\s*°C/, 'document the hot water ceiling');
   }
   assert.match(
     manifest.config_schema[0].description.fr,
@@ -110,7 +110,8 @@ test('the configuration matches the code; the commands are off; the hot water ce
     ],
     [DHW_CAP.default, DHW_CAP.min, DHW_CAP.max],
   );
-  assert.equal(DHW_CAP.max, 60);
+  assert.equal(DHW_CAP.max, 65);
+  assert.equal(DHW_CAP.default, 65);
   assert.deepEqual(
     [fields.poll_interval.min, fields.poll_interval.max],
     [POLL_INTERVAL.min, POLL_INTERVAL.max],

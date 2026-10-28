@@ -83,8 +83,8 @@ Off is refused, nothing sent, in these cases only:
 turn on **Allow the commands** (off by default). Then:
 
 - the hot water setpoint takes whole degrees from 28 °C to the ceiling of
-  the configuration, **55 °C by default**, 40 to 60 °C (never more than
-  60 °C, whatever is typed): scalding risk;
+  the configuration, **65 °C by default**, 40 to 65 °C (never more than
+  65 °C, whatever is typed): scalding risk;
 - each command reads the value and the serial number of the heat pump just
   before writing, and succeeds only when a read back shows the value asked;
 - a command refused or cancelled says "nothing sent"; one sent without an

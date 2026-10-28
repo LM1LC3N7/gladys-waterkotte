@@ -16,7 +16,7 @@
 //     unless the option allows them (checked on arrival and right before the
 //     bytes leave), decided on a fresh read of the target and of the serial
 //     number (never the values in memory), the setpoint bounded (28 °C to the
-//     configured ceiling, 55 °C by default, never above 60 °C), /data saved
+//     configured ceiling, 65 °C by default, never above 65 °C), /data saved
 //     before the first byte, a success only when a read back shows the value.
 //
 // Two clocks: `now` (wall clock) dates what /data keeps; `monotonic` paces

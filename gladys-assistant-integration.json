@@ -138,13 +138,13 @@
         "fr": "Plafond de l'eau chaude (°C)"
       },
       "description": {
-        "en": "Scalding risk: Gladys never sets the hot water above this temperature. 55 °C by default, from 40 to 60 °C (never more than 60 °C, whatever is typed).",
-        "fr": "Risque de brûlure : Gladys ne règle jamais l'eau chaude au-dessus de cette température. 55 °C par défaut, de 40 à 60 °C (jamais plus de 60 °C, quoi qu'on saisisse)."
+        "en": "Scalding risk: Gladys never sets the hot water above this temperature. 65 °C by default, from 40 to 65 °C (never more than 65 °C, whatever is typed).",
+        "fr": "Risque de brûlure : Gladys ne règle jamais l'eau chaude au-dessus de cette température. 65 °C par défaut, de 40 à 65 °C (jamais plus de 65 °C, quoi qu'on saisisse)."
       },
       "required": false,
-      "default": 55,
+      "default": 65,
       "min": 40,
-      "max": 60
+      "max": 65
     },
     {
       "key": "poll_interval",

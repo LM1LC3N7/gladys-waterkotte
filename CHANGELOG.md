@@ -10,6 +10,10 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Changed
+
+- Hot water ceiling raised to 65 °C (default 65 °C), device limits still apply.
+
 ## [0.1.1] - 2026-10-27
 
 ### Added

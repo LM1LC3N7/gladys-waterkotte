@@ -82,7 +82,7 @@ function numberOf(value) {
 
 /**
  * The hot water ceiling: whole degrees within DHW_CAP, else the default
- * (55 °C). Never above DHW_CAP.max, whatever was typed.
+ * (65 °C). Never above DHW_CAP.max, whatever was typed.
  */
 export function dhwCapOf(value) {
   const number = numberOf(value);
