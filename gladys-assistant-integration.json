@@ -6,8 +6,8 @@
     "en": "Waterkotte EcoTouch heat pumps on the local network: temperatures, state, optional commands.",
     "fr": "PAC Waterkotte EcoTouch en local : températures, état, commandes en option."
   },
-  "version": "0.1.1",
-  "docker_image": "ghcr.io/lm1lc3n7/gladys-waterkotte:0.1.1",
+  "version": "0.1.2",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-waterkotte:0.1.2",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-waterkotte/main/cover.png",
   "categories": ["climate"],
